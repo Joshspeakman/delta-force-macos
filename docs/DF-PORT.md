@@ -117,13 +117,13 @@ filtered, mipmapped textures, depth-tested against the terrain's depth.
   store (`0x4127df`, cycling 0..3 and skipping unavailable values; Hardware needs 16 Million) and the label
   (`0x4121b2` / `0x412382`). 256 colours stays software (palettised buffer). `DF_HARDWARE=1` turns the GPU path on in
   any 32-bit mode.
-- **Cost** (640x480, M1 Pro): one readback a frame ≈ 1.1-1.3 ms, upload ≈ 0.13 ms, GPU 0.4-0.7 ms for ~900-1000
+- **Cost** (640x480, Apple Silicon): one readback a frame ≈ 1.1-1.3 ms, upload ≈ 0.13 ms, GPU 0.4-0.7 ms for ~900-1000
   polygons in 60-130 draws; water missions sync twice a frame.
 
 ## Screen shapes (widescreen)
 
 `runtime/win32/df_res.c`. The games' "1024x768" choice renders at the screen's shape: 768 lines and
-as many columns as the aspect gives (1184x768 on a 16:10 MacBook screen, 1360x768 at 16:9, 1792x768 at 21:9; widths
+as many columns as the aspect gives (1184x768 on a 16:10 screen, 1360x768 at 16:9, 1792x768 at 21:9; widths
 rounded to 16 in DF1, 8 in DF2; at most 2048 columns, so 32:9 gets 2048x576), scaled to the screen by the host like any
 mode. `DF_RES=WxH` sets the size (a taller one is scaled down to 768 lines, keeping its shape), `DF_RES=off` keeps
 1024x768; a 4:3 screen gives 1024x768 as before. The other choices and the menus (640x480) are unchanged. DF1's
@@ -192,7 +192,7 @@ scripts reach the same screens as on Linux:
   Hardware (65 Thousand needs a 3Dfx card and is never selectable here), the GL path in a game (only in the renderer
   test, on the Mac's OpenGL 4.1).
 - Screen shapes (test host, `DF_RES`, into the first mission): DF1 16 Million at 960x768, 1024x576, 1184x768 (this
-  MacBook's 1728x1117 screen, the default), 1360x768, 1792x768 and 2048x768, 256 colours at 1184x768, Hardware at 1360x768,
+  a 1728x1117 screen, 16:10, the default), 1360x768, 1792x768 and 2048x768, 256 colours at 1184x768, Hardware at 1360x768,
   the scope and binoculars at 1360; DF2 Software, Hardware and Windowed at 960x768, 1024x576, 1184x768 and 1792x768
   (Hardware also 1360 and 2048, Software 2560), the scope and binoculars at 1024x576 and 1792x768. Same vertical
   framing as 1024x768, more at the sides. An array shrunk back to its old size faults on its guard page at 1360x768.

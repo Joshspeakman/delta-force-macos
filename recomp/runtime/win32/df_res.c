@@ -1,7 +1,7 @@
 /* Delta Force 1 and 2: widescreen and other screen shapes (tools/lift.py: the 'res' entries of DF_HOOKS and DF_MOVED).
  *
  * The games offer six or seven 4:3 sizes. Here their biggest ordinary choice, "1024x768", renders at the shape of the
- * screen instead: 768 lines and as many columns as the screen's aspect gives (1184x768 on a 16:10 MacBook screen,
+ * screen instead: 768 lines and as many columns as the screen's aspect gives (1184x768 on a 16:10 screen,
  * 1360x768 at 16:9, 1792x768 at 21:9), which the host scales to the screen like any other mode. DF_RES=WxH picks
  * another size (one taller than 768 lines is scaled down to 768, keeping its shape), DF_RES=off keeps 1024x768. The
  * other choices (640x480, 800x600, ...) and the menus (640x480) are as they were; the host shows them with bars.

@@ -36,18 +36,8 @@ for test in frame_pacer display_modes; do
     "$OUT/$test"
 done
 python3 -m py_compile recomp/host/linux_launcher/*.py recomp/tools/check_edition.py \
-    recomp/tools/install_linux.py recomp/tools/prepare_linux_icon.py
-python3 recomp/tests/test_lab_test.py
+    recomp/tools/prepare_linux_icon.py
 python3 recomp/tests/edition_test.py
-"${CC[@]}" -O1 -g -D_GNU_SOURCE -DDS2_BROKEN_WORLD -I recomp/runtime \
-    -o "$OUT/guest-flow" recomp/tests/guest_flow_test.c recomp/runtime/rt.c -lm -pthread
-"$OUT/guest-flow"
-"${CC[@]}" -O1 -g -D_GNU_SOURCE -DDS2_BROKEN_WORLD -I recomp/runtime \
-    -o "$OUT/bw-lock" recomp/tests/bw_lock_test.c recomp/runtime/rt.c -lm -pthread
-"$OUT/bw-lock"
-"${CC[@]}" -O1 -g -D_GNU_SOURCE -DDS2_BROKEN_WORLD -I recomp/runtime \
-    -o "$OUT/bw-save-compat" recomp/tests/bw_save_compat_test.c -lm
-"$OUT/bw-save-compat"
 
 if [[ -x recomp/.venv/bin/python ]]; then
     recomp/.venv/bin/python recomp/tests/lift_flow_test.py

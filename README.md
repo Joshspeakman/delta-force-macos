@@ -14,7 +14,9 @@ on a copy in the build folder, recompiles that copy, and reads the game's data f
 |---|---|---|
 | Menus, soldier, campaign/quick missions, briefing | working (Mac, Linux) | working (Mac, Linux) |
 | Missions: voxel terrain, models, HUD, movement, mouse-look | working (Mac, Linux) | working (Mac, Linux) |
-| Renderers | **16 million colours** and **256 colours** (Settings → Colors), **windowed** | **Full Screen (Software)**, **Full Screen (Hardware)** (Direct3D, `Hw_d3d.dll` recompiled), **Windowed** |
+| Renderers | **16 million colours** and **256 colours** (Settings → Colors), **Hardware** (new: objects on the GPU over the CPU terrain, Settings → Colors), **windowed** | **Full Screen (Software)**, **Full Screen (Hardware)** (Direct3D, `Hw_d3d.dll` recompiled), **Windowed** |
+| Frame rate | a frame per display refresh when the CPU terrain keeps up (120 at 640x480 here), otherwise every second refresh (about 60 at 1184x768); the game's 62.5 Hz tick unchanged | the same (Software: 120 in light views; Hardware: 60) |
+| Screen shapes | the "1024x768" choice renders at the screen's shape (768 lines, wider view on wider screens) | the same, all three drivers |
 | Sound and music | working (Mac, Linux) | working (Mac, Linux) |
 | LAN games ("LAN (IPX)" in the game, played over TCP/IP) | working (Mac, Linux) | working (Mac, Linux) |
 | Internet games by address ("Internet") | working (Mac, Linux) | — (DF2 has no such option: use NovaWorld) |
