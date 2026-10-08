@@ -2,6 +2,8 @@
 // Win32 layer); this file provides the window, the Metal renderer consuming the game's D3D7 command stream in-process
 // (src/renderer), and input (mouse/keyboard -> Windows messages and key state, relative mouse like the original).
 //   DungeonSiegeNative --exe <DungeonSiege.exe> --game <game folder> --data <folder for C: and saved files>
+#include <pwd.h>
+#include <sandbox.h>
 #import <AppKit/AppKit.h>
 #import <Metal/Metal.h>
 #import <QuartzCore/QuartzCore.h>
@@ -459,11 +461,15 @@ static void type_text(NSString *text)
 - (NSApplicationTerminateReply)applicationShouldTerminate:(NSApplication *)s { (void)s; return NSTerminateNow; }
 @end
 
-/* After a crash: say so, and offer the report (not in test mode). */
+/* After a crash: say so, and offer the report (not in test mode). In the sandbox (Delta Force) Finder can't be asked to
+ * show it; the next start, before the sandbox, offers it again. */
+static int sandboxed;
 static void show_report_alert(NSString *title, NSString *path)
 {
     NSAlert *al = [NSAlert new]; al.alertStyle = NSAlertStyleWarning; al.messageText = title;
-    al.informativeText = [NSString stringWithFormat:@"A report was saved:\n%@\n\nIt says what the game was doing, so the problem can be found and fixed.", path];
+    al.informativeText = [NSString stringWithFormat:@"A report was saved:\n%@\n\nIt says what the game was doing, so the problem can be found and fixed.%@", path,
+                          sandboxed ? @"\n\nThe game will offer to show it the next time it starts." : @""];
+    if (sandboxed) { [al addButtonWithTitle:@"OK"]; [NSApp activateIgnoringOtherApps:YES]; [al runModal]; return; }
     [al addButtonWithTitle:@"Show Report"]; [al addButtonWithTitle:@"OK"];
     [NSApp activateIgnoringOtherApps:YES];
     if ([al runModal] == NSAlertFirstButtonReturn) [[NSWorkspace sharedWorkspace] activateFileViewerSelectingURLs:@[[NSURL fileURLWithPath:path]]];
@@ -504,6 +510,49 @@ static void on_objc_exception(NSException *e)
     char r[400]; snprintf(r, sizeof r, "The macOS side of the program raised an Objective-C exception: %s: %s.", e.name.UTF8String, e.reason.UTF8String ?: "");
     w32_crash_report("crash", r, 0, 0);
 }
+
+#ifdef DF_EDITION
+/* The game process in a macOS sandbox (Delta Force: its multiplayer puts 1998 network code within reach of anyone
+ * who finds a public game). From here on it can read the game folder, the program's own folder and the data folder,
+ * write only the data folder and temporary files, start no other program and have none opened for it (LaunchServices,
+ * Apple events); the rest of the user's home folder and other volumes can't be read. Everything else the system needs (graphics, sound, the window server, the network)
+ * stays as it is. In a sandbox profile the last matching rule wins, so each "allow" below narrows the "deny" before
+ * it. DF_NO_SANDBOX=1 leaves it out. */
+static void sbx_quote(char *out, size_t cap, const char *path)       /* a resolved path as an SBPL string literal */
+{
+    char real[PATH_MAX]; if (!realpath(path, real)) snprintf(real, sizeof real, "%s", path);
+    size_t n = 0; if (cap < 4) return; out[n++] = '"';
+    for (const char *s = real; *s && n + 3 < cap; s++) { if (*s == '"' || *s == '\\') out[n++] = '\\'; out[n++] = *s; }
+    out[n++] = '"'; out[n] = 0;
+}
+static void enter_sandbox(const char *exe, const char *game, const char *data, const char *bin)
+{
+    if (getenv("DF_NO_SANDBOX") && atoi(getenv("DF_NO_SANDBOX"))) { fprintf(stderr, "DungeonSiegeNative: no sandbox (DF_NO_SANDBOX)\n"); return; }
+    char exedir[PATH_MAX]; snprintf(exedir, sizeof exedir, "%s", exe); char *sl = strrchr(exedir, '/'); if (sl) *sl = 0; else snprintf(exedir, sizeof exedir, ".");
+    char appdir[PATH_MAX]; snprintf(appdir, sizeof appdir, "%s/..", bin);   /* the .app's Contents (or the build's app folder's parent) */
+    const char *home = getenv("HOME"); struct passwd *pw = getpwuid(getuid()); if (pw && pw->pw_dir) home = pw->pw_dir;
+    char G[PATH_MAX + 8], D[PATH_MAX + 8], E[PATH_MAX + 8], A[PATH_MAX + 8], Hm[PATH_MAX + 8];
+    sbx_quote(G, sizeof G, game); sbx_quote(D, sizeof D, data); sbx_quote(E, sizeof E, exedir); sbx_quote(A, sizeof A, appdir); sbx_quote(Hm, sizeof Hm, home ? home : "/Users");
+    char prof[16384];
+    snprintf(prof, sizeof prof,
+        "(version 1)\n(allow default)\n"
+        "(deny file-write* (subpath \"/\"))\n"
+        "(allow file-write* (subpath %s) (subpath \"/private/tmp\") (subpath \"/private/var/folders\") (subpath \"/dev\"))\n"
+        "(deny file-read* (subpath %s) (subpath \"/Volumes\"))\n"
+        "(allow file-read* (literal %s) (subpath %s) (subpath %s) (subpath %s) (subpath %s))\n"
+        "(deny process-exec* process-fork)\n"
+        "(deny lsopen)\n(deny appleevent-send)\n",   /* nor have LaunchServices or another app open something for it */
+        D, Hm, Hm, G, D, E, A);
+    char *err = 0;
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"          /* the documented call; still what the system uses */
+    int bad = sandbox_init(prof, 0, &err);
+#pragma clang diagnostic pop
+    if (bad) { fprintf(stderr, "DungeonSiegeNative: sandbox not applied: %s\n", err ? err : "?"); return; }
+    sandboxed = 1;
+    fprintf(stderr, "DungeonSiegeNative: sandboxed (reads the game, program and data folders; writes the data folder)\n");
+}
+#endif
 
 int main(int argc, char **argv)
 {
@@ -559,6 +608,9 @@ int main(int argc, char **argv)
         w32_host_window_created = window_created; w32_host_window_changed = window_changed;
         if (w32_prepare(exe, game, drive_c, overlay)) { fprintf(stderr, "DungeonSiegeNative: cannot load %s\n", exe); return 1; }
         if (!test_mode) report_from_last_session(data);
+#ifdef DF_EDITION
+        enter_sandbox(exe, game, data, bin.UTF8String);
+#endif
         [NSTimer scheduledTimerWithTimeInterval:0.5 repeats:YES block:^(NSTimer *tm) { (void)tm; w32_crash_heartbeat(2); }];   /* UI thread alive */
         if (test_mode && getenv("DS_CRASHTEST") && !strncmp(getenv("DS_CRASHTEST"), "uihang", 6))
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(atof(getenv("DS_CRASHTEST") + 7) * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ sleep(14); });
