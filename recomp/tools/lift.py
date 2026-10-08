@@ -85,7 +85,39 @@ DF_HOOKS = {
             0x00465ecb: 'Game Loop render returns: the tick\'s own positions back',
         },
     },
-    'res': {'df1': {}, 'df2': {}},
+    'res': {
+        'df1': {
+            0x00496510: 'set a video mode (w, h, windowed): 1024x768 renders at the screen\'s shape',
+            0x00407af0: 'max_res just read from df.cfg: raised so the custom size can be chosen',
+            0x0044a8fc: 'projection set-up: the half angle in ST(0) widened for screens wider than 4:3 (Hor+)',
+            0x00428810: 'HUD pictures (weap/pos%i.pcx): the set of the 4:3 screen of the same height',
+            0x00402d50: 'small font (f_sml%i.pcx): likewise',
+            0x00473c9c: 'end of the 2D clip reset (1023x767): to the screen\'s edges',
+            0x00465f30: 'scope circle (w, h): its radius from the 4:3 width of the same height',
+            0x00465f8e: 'scope circle: its centre at 3/4 of the screen width',
+        },
+        'df2': {
+            0x0047a2d0: 'set the software display (w, h, windowed): 1024x768 renders at the screen\'s shape',
+            0x00425d50: 'Hardware: the driver\'s set-mode call (w, h, 32, 1), likewise',
+            0x00426000: 'Hardware: the driver\'s set-mode call on a change of size, likewise',
+            0x004260d4: 'Hardware: the size of its terrain and depth copy (0xa6df74/78)',
+            0x0046678e: 'z buffer allocated by size choice: 4*W*H',
+            0x004661da: 'main view: the projection request\'s field of view widened (Hor+)',
+            0x004665e0: 'HUD bitmaps and HUD.DEF section: the set of the 4:3 screen of the same height',
+            0x004672c0: 'likewise (mission start)',
+            0x004665e5: 'after them: the layout moved to where that set sits on the screen',
+            0x004672c5: 'likewise (mission start)',
+            0x0044878e: 'top HUD bar (a linear copy): centred, row by row',
+            0x0044864d: 'bottom HUD bar: likewise',
+            0x004261f9: 'map: its scale from the bitmap set\'s width, not the screen\'s',
+            0x004555a0: 'rifle scope circle (w, h): its radius from the 4:3 width of the same height',
+            0x00455602: 'rifle scope: its centre at 3/4 of the screen width',
+            0x00458066: 'end of the 2D clip reset (1023x767): to the screen\'s edges',
+            0x0047a7b2: 'Windowed: the StretchDIBits of each frame into the 640x480 window: at the custom size as it is',
+            0x004487a1: 'message lines in the top bar: spaced by the bitmap set\'s width, not the screen\'s',
+            0x00448e68: 'recent-messages list: likewise',
+        },
+    },
     'hw': {
         'df1': {
             0x004856f8: 'the 3D frame: the objects begin (GPU segment opens; colour and depth go up with the first polygon)',
@@ -117,6 +149,57 @@ DF_OVERRIDES = {
         'df2': {},
     },
 }
+# Delta Force: fixed-size arrays moved to bigger blocks (one table per feature, as above). The lifter rewrites the
+# address field (imm32 or disp32) of each listed instruction from the old array to the new block before it decodes
+# anything (Lifter.move_arrays), so every use of the field (push, mov, lea, an indexed load) follows; the executable
+# itself is not changed (the runtime maps it as shipped, the old array just stays unused). The runtime commits each
+# block at load time, before the game runs (loader.c, from the rt_blocks table written into fntab.c), inside one
+# reservation: the uncommitted 16 KB host page after each block faults if the game writes past its end. An instruction
+# that names an address inside an old array but is not listed stops the build (constants and neighbours that merely
+# fall in the range are listed under 'other').
+#   old, size: the array in the executable; new, new_size: the block. It starts at the old array's offset within its
+#   4 KB page (the same alignment as before, for any code that depends on it), ends on a 16 KB boundary and has 16 KB
+#   free after it.
+DF_MOVED = {
+    'res': {
+        'df1': [
+            dict(old=0x00503740, size=0x17a000, new=0x7e004740, new_size=0x77f8c0,
+                 what='16-bit z buffer (2*W*(H-H/8) bytes; also the scope\'s scratch, 4*W*H): 2048x768 and more',
+                 sites=(0x402a2b, 0x402ac5, 0x403912, 0x403969, 0x4039ce, 0x403a24, 0x404584, 0x4045d0, 0x4048b8, 0x440929),
+                 # constants 6.0 / 100.0 in 16.16 (clamps); the byte table at 0x67d740 after it, indexed from 1
+                 other=(0x44daf9, 0x44db04, 0x44f6cc, 0x44f6d8, 0x44f782, 0x44f8f7, 0x44f903, 0x44f9b3, 0x44fb13, 0x44fb1b,
+                      0x44fb8e, 0x450d1b, 0x45123c, 0x451d9c, 0x45e47a, 0x45e486, 0x45e54f, 0x45e6c9, 0x45e6d5, 0x45e783,
+                      0x4851fc, 0x48e431, 0x48e462, 0x48e478, 0x48e4c5, 0x48eee6, 0x48df77, 0x48dfed)),
+            dict(old=0x00cb8d84, size=0x6000, new=0x7e789d84, new_size=0xe27c,
+                 what='terrain records per column pair (48 bytes): 512 pairs (W <= 1024) -> 1207',
+                 sites=(0x48930f, 0x489356, 0x4893b0, 0x489ae0, 0x48c353, 0x48c501), other=()),
+            dict(old=0x00c975a8, size=0x1000, new=0x7e79d5a8, new_size=0x2a58,
+                 what='terrain row offset per column: 1024 columns -> 2710',
+                 sites=(0x4899d8, 0x489ba9), other=()),
+        ],
+        'df2': [
+            # 0x4728dd reads the first array through a pointer into the second ([edi-0x15004]): same distance here
+            dict(old=0x0051d60c, size=0x1400, new=0x7e00d60c, new_size=0x29f4,
+                 what='terrain offset per column: 1280 columns -> 2685', sites=(0x472342,), other=()),
+            dict(old=0x00532610, size=0x1010, new=0x7e00d60c + 0x15004, new_size=0x59f0,
+                 what='terrain perspective correction per column: 1028 columns -> 5756', sites=(0x472746, 0x472869), other=()),
+        ],
+    },
+    'frame': {'df1': [], 'df2': []},
+    'hw': {'df1': [], 'df2': []},
+}
+BLOCK_ARENA = (0x7e000000, 0x7f000000)       # where moved arrays live: the top of the VirtualAlloc arena, reserved first
+def df_moved(features, edition):
+    out = [dict(m, feature=name) for name, games in features.items() for m in games.get(edition, [])]
+    out.sort(key=lambda m: m['new'])
+    for k, m in enumerate(out):
+        end = m['new'] + m['new_size']
+        assert BLOCK_ARENA[0] + 0x4000 <= m['new'] and end + 0x4000 <= BLOCK_ARENA[1] and not end & 0x3fff, \
+            'DF %s %#x: block %#x+%#x must end on a 16 KB boundary inside the arena' % (m['feature'], m['old'], m['new'], m['new_size'])
+        assert not (m['new'] ^ m['old']) & 0xfff, 'DF %s %#x: the block must start at the same offset in its page' % (m['feature'], m['old'])
+        assert k + 1 == len(out) or end + 0x4000 <= (out[k + 1]['new'] & ~0x3fff), 'DF %s %#x: no guard page after it' % (m['feature'], m['old'])
+    return out
+
 def df_table(features, edition):
     out = {}
     for name, games in features.items():
@@ -124,6 +207,11 @@ def df_table(features, edition):
             assert addr not in out, 'DF %s %#x: already used by another feature' % (name, addr)
             out[addr] = '%s: %s' % (name, what)
     return out
+
+def BLOCKS_C(blocks):
+    """fntab.c: the guest blocks the runtime commits at load time (DF_MOVED), as {address, size, what}"""
+    return ('const struct rt_block { uint32_t addr, size; const char *what; } rt_blocks[] = {\n' +
+            ''.join('    {0x%08xu, 0x%xu, "%s"},\n' % (va, n, w) for va, n, w in blocks) + '    {0, 0, 0}\n};\n')
 
 RET_FORMS = ('repz ret', 'rep ret', 'bnd ret')
 
@@ -174,6 +262,40 @@ class Lifter:
         if not 2 <= t - nxt <= 256 or not self.TLO <= t < self.THI: return None
         b = self.code[nxt - self.TLO:t - self.TLO]; z = b.rstrip(b'\0')
         return t if b[-1:] == b'\0' and len(z) >= 2 and all(32 <= x < 127 for x in z) else None
+
+    def move_arrays(self, moved):
+        """DF_MOVED: point each listed instruction's address field (imm32 or disp32) at the array's new block, in the
+        code bytes the lifter decodes. Returns {instruction va: block}."""
+        code = bytearray(self.code); listed = {}
+        for m in moved:
+            for va in m['sites']:
+                i = self.ins(va); assert i, 'DF moved %#x: no instruction at %#x' % (m['old'], va)
+                hits = [o for o, s in ((i.imm_offset, i.imm_size), (i.disp_offset, i.disp_size))
+                        if s == 4 and m['old'] <= struct.unpack_from('<I', i.bytes, o)[0] < m['old'] + m['size']]
+                assert len(hits) == 1, 'DF moved %#x: %#x %s %s names it %d times' % (m['old'], va, i.mnemonic, i.op_str, len(hits))
+                v = struct.unpack_from('<I', i.bytes, hits[0])[0]
+                struct.pack_into('<I', code, va - self.TLO + hits[0], v - m['old'] + m['new']); listed[va] = m
+        self.code = bytes(code); self.cache.clear()
+        return listed
+    def check_moved(self, moved, listed, insns):
+        """No instruction (of those decoded) and no fixup of the image may still name an address inside a moved array,
+        unless the table says it is not about the array (a constant that falls in the range, the next array's -1)."""
+        bad = []; cover = {}
+        for va, i in insns.items():
+            for b in range(va, va + i.size): cover[b] = va
+            for o, s in ((i.imm_offset, i.imm_size), (i.disp_offset, i.disp_size)):
+                if s != 4: continue
+                v = struct.unpack_from('<I', i.bytes, o)[0]
+                for m in moved:
+                    if m['old'] <= v < m['old'] + m['size'] and va not in m['other']: bad.append('%#x %s %s' % (va, i.mnemonic, i.op_str))
+        for r in self.pe.relocs():               # absolute fixups: also code the analysis did not reach, and data
+            v = self.pe.u32(r)
+            for m in moved:
+                if v is not None and m['old'] <= v < m['old'] + m['size'] and cover.get(r) not in listed and cover.get(r) not in m['other']:
+                    bad.append('fixup at %#x -> %#x' % (r, v))
+        assert not bad, 'DF_MOVED: still naming a moved array: ' + '; '.join(bad)
+        assert not set(listed) & set(self.smc), 'DF_MOVED: a rewritten instruction is self-modified'
+        assert not {b for va, (n, _) in self.slots.items() for b in range(va, va + n)} & set(listed), 'DF_MOVED: inside a code slot'
 
     def adjusted_return(self, target, ret):
         """A helper can change its CALL return before entering the real callee."""
@@ -1103,12 +1225,16 @@ def main():
         if not a.tag: L.hooks.setdefault(int(h, 16), 'trace')
     os.makedirs(a.outdir, exist_ok=True)
     pre = a.tag + '_' if a.tag else ''
-    L.smc = {}
+    L.smc = {}; moved = []
+    if not a.tag and edition in ('df1', 'df2'):                 # before anything is decoded
+        moved = df_moved(DF_MOVED, edition); listed = L.move_arrays(moved)
     if not a.tag and edition in ('df1', 'df2') and not a.only:
         every = {}
         for fn in sorted(L.funcs): every.update(L.collect(fn))
         L.slots = L.find_slots(every); L.cache.clear()
         L.smc, odd = L.smc_scan(sorted(L.funcs))
+        L.check_moved(moved, listed, every)
+        if moved: print('moved arrays: %d (%d instructions rewritten)' % (len(moved), len(listed)))
         slot_bytes = {b for va, (n, _) in L.slots.items() for b in range(va, va + n)}
         odd = [o for o in odd if o[0] not in slot_bytes and L.code[o[1] - L.TLO:o[1] - L.TLO + 2] != b'\0\0']
         json.dump({'fields': {'0x%x' % k: v for k, v in L.smc.items()}, 'odd': odd,
@@ -1137,8 +1263,9 @@ def main():
     fns = sorted(done)
     with open(os.path.join(a.outdir, pre + 'funcs.h'), 'w') as h:
         h.write('#include "rt.h"\n'); h.writelines('void f_%08x(Ctx *c);\n' % x for x in fns)
+    blocks = [[m['new'], m['new_size'], '%s: %s' % (m['feature'], m['what'])] for m in moved]
     json.dump({'base': L.pe.base, 'entry': L.pe.entry, 'imp_base': a.imp_base, 'functions': fns,
-               'imports': [[va, n] for va, n in L.imports]}, open(os.path.join(a.outdir, pre + 'image.json'), 'w'))
+               'imports': [[va, n] for va, n in L.imports], 'blocks': blocks}, open(os.path.join(a.outdir, pre + 'image.json'), 'w'))
     if pre: fns_tab = None
     else:
      with open(os.path.join(a.outdir, 'fntab.c'), 'w') as t:
@@ -1149,6 +1276,7 @@ def main():
         t.writelines('    {0x%08xu, "%s"},\n' % (va, n) for va, n in L.imports)
         t.write('};\nconst unsigned rt_imptab_n = %d;\n' % len(L.imports))
         t.write('const struct rt_image { const char *name; uint32_t base, imp_first, imp_count; } rt_images[] = {{"", 0x%xu, 0, %d}};\nconst unsigned rt_images_n = 1;\n' % (L.pe.base, len(L.imports)))
+        t.write(BLOCKS_C(blocks))
     for k in range(0, len(fns), a.per_file):
         with open(os.path.join(a.outdir, pre + 'lift_%03d.c' % (k // a.per_file)), 'w') as o:
             o.write('#include "' + pre + 'funcs.h"\n#pragma clang diagnostic ignored "-Wunused-label"\n#pragma clang diagnostic ignored "-Wunused-variable"\n\n')

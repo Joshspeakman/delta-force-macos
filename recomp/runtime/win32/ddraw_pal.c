@@ -664,12 +664,14 @@ M(dd_CreateSurface, 4) ME(PDraw, T_DD)                              /* (desc, ou
 END
 NOT_M(dd_DuplicateSurface, 3)
 static const uint16_t modes[][2] = {{640, 480}, {800, 600}, {1024, 768}};
+int df_res_mode(uint32_t *w, uint32_t *h) __attribute__((weak));     /* df_res.c: the custom size, listed after these */
 M(dd_EnumDisplayModes, 5) ME(PDraw, T_DD)                           /* (flags, desc filter, ctx, callback) */
     uint32_t filter = ARG(2), ctx = ARG(3), cb = ARG(4), v = (uint32_t)vidx_of_this(c, vt_dd), size = v >= 2 ? 124 : 108;
-    uint32_t d = heap_alloc(w32_process_heap, 8, 124);
+    uint32_t d = heap_alloc(w32_process_heap, 8, 124), xw = 0, xh = 0;
     static const uint32_t depths[] = {8, 16, 32};
-    for (int di = 0; di < 3; di++) for (size_t k = 0; k < sizeof modes / sizeof *modes; k++) {
-        uint32_t w = modes[k][0], h = modes[k][1], bpp = depths[di];
+    size_t nm = sizeof modes / sizeof *modes + (df_res_mode && df_res_mode(&xw, &xh));
+    for (int di = 0; di < 3; di++) for (size_t k = 0; k < nm; k++) {
+        uint32_t w = k < 3 ? modes[k][0] : xw, h = k < 3 ? modes[k][1] : xh, bpp = depths[di];
         if (filter) { uint32_t ff = rt_r32(G_MEM, filter + SD_FLAGS);
             if ((ff & DDSD_WIDTH) && rt_r32(G_MEM, filter + SD_WIDTH) != w) continue;
             if ((ff & DDSD_HEIGHT) && rt_r32(G_MEM, filter + SD_HEIGHT) != h) continue;
