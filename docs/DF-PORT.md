@@ -1,7 +1,8 @@
-# Delta Force 1 & 2: port notes and Mac handoff
+# Delta Force 1 & 2: port notes
 
-State as of 2026-10-08. Everything here was done and verified on Linux (CachyOS, SDL2/OpenGL host), comparing against
-the original executables running under Proton. The Mac side has not been compiled yet; that is the next step.
+State as of 2026-10-08. The port was developed on Linux (CachyOS, SDL2/OpenGL host), comparing against the original
+executables running under Proton, then built and checked on an Apple Silicon Mac (Metal host): see "Verified on the
+Mac".
 
 ## The executables
 
@@ -72,26 +73,36 @@ Click scripts that reach a mission (test host, `DS_TEST=1`, game coordinates 640
   arrows (270,226)/(574,226): Software → Hardware → Windowed; accept (320,439).
 - Settings persist in the data folder: start each comparison from a fresh one.
 
-## Mac handoff: what to do first
+## Verified on the Mac
 
-1. `recomp/build_df.sh "<game folder>"` on the Mac: tools/build_runtime.sh's macOS branch now passes the edition flags
-   (`-DDF_EDITION -DDF1_EDITION/-DDF2_EDITION`), the third_party include paths and MojoShader, then runs
-   tools/build_app.sh (`app/DeltaForce`, `app/DeltaForce2`). None of this has been compiled on macOS: expect small fixes
-   (runtime files written for Linux, e.g. vulkan.c, gdi32.c's font backend, platform.h).
-2. `src/renderer/renderer.m` / `shaders.metal`: the `DSR_DEPTH_UPLOAD` path (`depth_upload`, `fs_zupload`) is new and
-   unbuilt. Check DF2 Hardware against a Linux run of the same mission.
-3. `recomp/host/main.m`: under DF_EDITION the launch window is skipped (the game's own Settings screen chooses
-   renderer and resolution), DungeonSiege2.ini handling is off, input follows the newest main window, script clicks
-   are translated to desktop coordinates. Mouse capture and scaling of the 640x480 frame to the window come from the
-   shared host.
-4. `./install.sh --game-dir "<folder>"` makes `~/Applications/Delta Force.app` / `Delta Force 2.app`.
+Built with `recomp/build_df.sh` and installed with `install.sh` on Apple Silicon (arm64; no Rosetta). The same click
+scripts reach the same screens as on Linux:
+- DF1: 16M colours, 256 colours and Windowed, each into the first Peru mission; mouse-look in full screen.
+- DF2: Full Screen (Software), Full Screen (Hardware) and Windowed, each into "Six of One"; mouse-look in both full
+  screen drivers.
+- DF2 Hardware's depth upload (`depth_upload` in renderer.m, `fs_zupload`): the snowflakes are hidden behind the
+  terrain the CPU drew. Checked by uploading an all-near depth instead (every flake disappears) and by skipping the
+  upload (flakes show through the near ground).
+- Sound: the mixed output (`W32_AUDIO_DUMP`) has the menu music and the mission sounds.
+- `tests/fuzz_sse.py`: every MMX form of both games matches Unicorn on arm64.
+- `~/Applications/Delta Force.app` and `Delta Force 2.app` launch full screen and quit from the menu.
+
+The game writes its settings (`df.cfg` / `df2.cfg`, and the soldier files) when it exits through its own Exit Game.
+A run that is killed (a test's timeout) keeps the settings it started with.
+
+Mac-specific fixes: `prof.c` (the sampling profiler's Darwin context and thread id) and `sims_imports.c` (no
+absolute-time `clock_nanosleep` on macOS: the multimedia timer sleeps until each deadline instead).
 
 ## Known gaps
 
 - Intro videos: DF2's `DF2INTRO.BIK` is skipped (no Bink decoder here; the game moves on). DF1 opens `INTRO.KDV`
   (NovaLogic's own format) at start-up; whether it plays as on Windows has not been checked.
-- DF2 Windowed: mouse-look does not respond after switching to Windowed in the same session (it does when the game
-  starts in Windowed). SetCursorPos is never called in that mode; not yet investigated.
+- Windowed (both games): no mouse-look. The games' own windowed branch lets the mouse go (not the host), in DF1: the
+  video mode routine (0x495ef0) calls 0x490e40 (ReleaseCapture, clears the capture flags at 0xcc0888/0xcc088c)
+  instead of 0x490e10 (SetCapture, sets them); WM_SETFOCUS re-captures only while 0xcc0888 is set, and the re-centring
+  in 0x497d20 (SetCursorPos) runs only when captured. Seen in a session that switched to Windowed and in one that
+  started in it (check a run really is windowed: StretchDIBits in `W32_TRACE`). Not yet compared with the original
+  under Proton; making windowed mode keep the mouse would need a hook at that call.
 - LAN multiplayer: Netsock.dll is recompiled and its imports are implemented, but no game has been hosted or joined.
 - Direct3D mode was compared against the original at a mission start: the terrain and its depth, and the textured,
   alpha-blended snowflakes the hardware driver adds, match; explosions, smoke and other effects have not been looked at.

@@ -3,7 +3,7 @@
 NovaLogic's **Delta Force** (1998) and **Delta Force 2** (1999), statically recompiled from your own Steam copies into
 native code: no Wine, no Rosetta, no emulator. It uses the same recompiler as the Dungeon Siege, Fallout: New Vegas,
 Diablo II and Sims ports. The target is Apple Silicon Macs (Metal, Core Audio); the Linux build (SDL, OpenGL) runs the same
-recompiled code and is where the port has been developed and tested so far.
+recompiled code.
 
 Nothing from the games is in this repository. The build verifies your `Df.exe` / `Df2.exe`, undoes the Steam wrapper
 on a copy in the build folder, recompiles that copy, and reads the game's data from your folder.
@@ -12,18 +12,19 @@ on a copy in the build folder, recompiles that copy, and reads the game's data f
 
 | | Delta Force (Steam 32620) | Delta Force 2 (Steam 32630) |
 |---|---|---|
-| Menus, soldier, campaign/quick missions, briefing | working (Linux) | working (Linux) |
-| Missions: voxel terrain, models, HUD, movement, mouse-look | working (Linux) | working (Linux) |
+| Menus, soldier, campaign/quick missions, briefing | working (Mac, Linux) | working (Mac, Linux) |
+| Missions: voxel terrain, models, HUD, movement, mouse-look | working (Mac, Linux) | working (Mac, Linux) |
 | Renderers | **16 million colours** and **256 colours** (Settings → Colors), **windowed** | **Full Screen (Software)**, **Full Screen (Hardware)** (Direct3D, `Hw_d3d.dll` recompiled), **Windowed** |
-| Sound and music | working (Linux) | working (Linux) |
+| Sound and music | working (Mac, Linux) | working (Mac, Linux) |
 | LAN multiplayer (`Netsock.dll`, recompiled) | builds, untested | builds, untested |
 | NovaWorld voice/browser (`Netcomm.dll`, `iBrowse.dll`) | — | not available (stubbed) |
-| macOS app | written, **not yet built** | written, **not yet built** |
+| macOS app (`install.sh`) | working (Apple Silicon) | working (Apple Silicon) |
 
 "Working (Linux)" means checked against the original game running under Proton with the same inputs (screenshots
-compared). The Mac side (Metal renderer, Core Audio, app host) is shared with the other ports and has the Delta Force
-changes written in, but it has not been compiled or run on a Mac yet: see [docs/DF-PORT.md](docs/DF-PORT.md) for the
-handoff, known gaps and how to test.
+compared). "Working (Mac)" means the same scripted runs on an Apple Silicon Mac reach the same screens: every renderer
+into a mission, mouse-look, the mixed sound, and both apps launched from `~/Applications`. Windowed mode has no
+mouse-look (the games' own windowed code lets the mouse go); see [docs/DF-PORT.md](docs/DF-PORT.md) for this and the
+other known gaps, and how to test.
 
 ## Install
 

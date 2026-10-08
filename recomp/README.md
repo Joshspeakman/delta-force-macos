@@ -3,7 +3,7 @@
 Static recompilation of the user's own Steam `Df.exe` / `Df2.exe` (and the NovaLogic DLLs in the game folder) into C,
 compiled for Apple Silicon or Linux x86-64. Nothing derived from the games is committed: `build_df.sh` regenerates
 everything locally from the user's files. Installing and playing: [README](../README.md); what was specific to these
-games and the Mac handoff: [docs/DF-PORT.md](../docs/DF-PORT.md).
+games and what was checked on each platform: [docs/DF-PORT.md](../docs/DF-PORT.md).
 
 ```sh
 recomp/build_df.sh "/path/to/Delta Force 2"      # -> recomp/work/df2 (a minute or two)
