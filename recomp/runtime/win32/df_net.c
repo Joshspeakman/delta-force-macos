@@ -68,12 +68,18 @@ static int search_targets(uint32_t *ip, uint16_t *port, int cap, uint16_t game_p
     static int last = -1; if (n - 1 != last) { last = n - 1; fprintf(stderr, "df: NovaWorld: %d host%s known\n", last, last == 1 ? "" : "s"); }
     return n;
 }
-/* NovaLogic's servers: the games report a hosted game to them (DF1 207.178.209.201 UDP 3875, DF2 208.231.90.230 UDP
- * 2827); the addresses are no longer NovaLogic's, so nothing is sent there */
+/* NovaLogic's servers: the games report a hosted game to them: a text report to novaworld.net UDP 3875 (or 53) from
+ * both games' NovaWorld hosts (DF1 resolved 207.178.209.201), and DF2's Netsock.dll a usage record to 208.231.90.230
+ * UDP 2827 from any host. The service is gone and the addresses are no longer NovaLogic's, so nothing is sent there. */
 static int send_drop(uint32_t ip, uint16_t port)
 {
     uint32_t h = ntohl(ip);
-    if ((h == 0xcfb2d1c9u && port == 3875) || (h == 0xd0e75ae6u && port == 2827)) {
+#ifdef DF2_EDITION
+    uint32_t nw = rt_r32(G_MEM, 0x681000);               /* where the game resolved novaworld.net (network order) */
+#else
+    uint32_t nw = rt_r32(G_MEM, 0x6e575c);
+#endif
+    if ((h == 0xcfb2d1c9u && port == 3875) || (h == 0xd0e75ae6u && port == 2827) || (nw && ip == nw && (port == 3875 || port == 53))) {
         static int said; if (!said++) fprintf(stderr, "df: NovaWorld: the game's report to NovaLogic's old server is not sent\n");
         return 1;
     }
@@ -139,9 +145,45 @@ static void lan_note(const char *what)
     static int said[2]; int k = what[0] == 'j';
     if (!said[k]++) fprintf(stderr, "df: LAN game: %s over TCP/IP\n", what);
 }
+/* NovaWorld on the Join screen. The games treat NovaWorld there as NovaLogic's web browser (DF1 runs novawrld.exe and
+ * reads its window title, DF2 opens its built-in iBrowse page); here it is a session search like LAN's: the screen
+ * gets LAN's layout (Search enabled, no browser row), Search runs the Internet search case with the NovaWorld type (the
+ * join switch above sends it to 255.255.255.254), and Join joins the session chosen as an Internet game. Menu globals
+ * that only steer the layout are shown as Internet (1) across one compare and put back after it. DF_NW_BROWSER=1
+ * keeps the original screens. */
+static int nw_saved;
+static void nw_mask(uint32_t g) { if (rt_r32(G_MEM, g) == 4) { rt_w32(G_MEM, g, 1); nw_saved = 1; } }
+static void nw_unmask(uint32_t g) { if (nw_saved) { rt_w32(G_MEM, g, 4); nw_saved = 0; } }
+static int nw_menu(Ctx *c, uint32_t addr)
+{
+    static int off = -1; if (off < 0) off = getenv("DF_NW_BROWSER") != 0;
+    if (off) return 0;
+    switch (addr) {
+#ifdef DF2_EDITION
+    /* mp_service at 0x4f2ae8 */
+    case 0x0043a2adu: if (rt_r32(G_MEM, 0x4f2ae8) == 4) c->eax = 0; return 1;        /* Search: not the iBrowse state */
+    case 0x00439f88u: if (c->eax == 4) c->eax = 1; return 1;                         /* the search switch: Internet case */
+    case 0x00439ffeu: if (rt_r32(G_MEM, 0x4f2ae8) == 4) rt_w32(G_MEM, c->esp, 4); return 1;   /* ... with type NovaWorld */
+    case 0x0043a2edu: if (rt_r32(G_MEM, 0x4f2ae8) == 4) c->eax = 0; return 1;        /* Join: not the iBrowse state */
+    case 0x0043a31fu: if (c->ecx == 4) c->ecx = 1; return 1;                         /* the joined game is an Internet one */
+#else
+    /* mp_service at 0x4cee68; the join state machine's service copy at 0x67f524 */
+    case 0x00415b14u: if (c->eax == 4) c->eax = 0; return 1;                         /* the screen layout: LAN's */
+    case 0x00415e48u: case 0x00415f31u: nw_mask(0x4cee68); return 1;                  /* Join and Search enabled as for */
+    case 0x00415e51u: case 0x00415f3cu: nw_unmask(0x4cee68); return 1;                /* LAN */
+    case 0x00417218u: if (c->eax == 4) c->eax = 1; return 1;                         /* the search switch: Internet case */
+    case 0x004172d7u: if (rt_r32(G_MEM, 0x4cee68) == 4) rt_w32(G_MEM, c->esp, 4); return 1;   /* ... with type NovaWorld */
+    case 0x0041d5cau: if (rt_r32(G_MEM, 0x67f524) == 4 && !rt_r32(G_MEM, 0x67f528)) rt_w32(G_MEM, 0x67f524, 1); return 1;   /* join, no browser */
+    case 0x0041649cu: if (rt_r32(G_MEM, 0x4cee68) == 4) c->esi = 0x4c9dc8; return 1;  /* the Browser row's text: blank */
+    case 0x00416337u: if (rt_r32(G_MEM, 0x4cee68) == 4) rt_w32(G_MEM, c->esp, 0x4c9dc8); return 1;
+#endif
+    }
+    return 0;
+}
 int df_net_hook(Ctx *c, uint32_t addr)
 {
     net_init();
+    if (nw_menu(c, addr)) return 1;
     switch (addr) {
 #ifdef DF2_EDITION
     case 0x0045c38du:                                    /* host; esi: the game port */
