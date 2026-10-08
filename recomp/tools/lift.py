@@ -42,10 +42,14 @@ DF_HOOKS = {
     'df1': {
         0x0044691f: 'host: the connection-type switch (LAN (IPX) hosts over TCP/IP)',
         0x00470c13: 'join: the connection-type switch (LAN (IPX) searches by broadcast over TCP/IP)',
+        0x004b9156: 'join: the call of netsock_JoinSession (the chosen host\'s address)',
+        0x004b92c4: 'host: the call of netsock_HostSession (the session gets an instance id)',
     },
     'df2': {
         0x0045c38d: 'host: the connection-type switch (LAN / IPX hosts over TCP/IP)',
         0x0040861d: 'join: the connection-type switch (LAN / IPX searches by broadcast over TCP/IP)',
+        0x004805b1: 'join: the call of netsock_JoinSession (the chosen host\'s address)',
+        0x00480723: 'host: the call of netsock_HostSession (the session gets an instance id)',
     },
 }
 

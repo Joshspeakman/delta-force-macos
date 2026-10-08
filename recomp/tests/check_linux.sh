@@ -21,6 +21,8 @@ done
 "${CC[@]}" -O1 -g -D_GNU_SOURCE -ffunction-sections -fdata-sections -Wl,--gc-sections -I recomp/runtime \
     -o "$OUT/interlocked" recomp/tests/interlocked_test.c -pthread
 "$OUT/interlocked"
+"${CC[@]}" -O1 -g -D_GNU_SOURCE -I recomp/runtime/win32 -o "$OUT/p2p_dht" recomp/tests/p2p_dht_test.c recomp/runtime/win32/p2p_dht.c -pthread
+"$OUT/p2p_dht"
 "${CC[@]}" -O1 -g -D_GNU_SOURCE -I recomp/runtime -I recomp/runtime/win32 -o "$OUT/dp8" \
     recomp/tests/dp8test.c recomp/runtime/win32/dp8proto.c -pthread
 "$OUT/dp8"

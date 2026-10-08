@@ -10,6 +10,7 @@
 #include <poll.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
+#include <time.h>
 #include <unistd.h>
 #ifndef MSG_NOSIGNAL
 #define MSG_NOSIGNAL 0
@@ -123,6 +124,54 @@ static int vbind_if_needed(uint32_t s, int fd)
     }
     return -1;
 }
+/* The game's UDP port (Delta Force: Netsock's 3568, set by df_net.c). Netsock receives on a socket bound to it and sends
+ * from another, unbound one, and answers every peer at the peer's address on that same fixed port. Across home routers
+ * (NAT) that fails: the router of a player who sent from some other port drops an answer to 3568. So while the game
+ * port is bound:
+ *   - datagrams from the game's unbound UDP sockets leave from the game port's socket (the router then has a mapping
+ *     for the game port, and the far side sees the port it will answer to);
+ *   - a datagram to a peer's game port goes to the port that peer's datagrams last came from, when its router changed
+ *     it (learned from what arrives on the game port, kept two minutes).
+ * W32_NET_NAT=0 turns both off. */
+static uint16_t game_port; static int game_fd = -1;
+static struct { uint32_t ip; uint16_t port; double t; } learned[64];
+void (*w32_game_port_closed)(uint16_t port);           /* df_net.c: hosting ended */
+void w32_set_game_port(uint16_t port) { pthread_mutex_lock(&s_lock); game_port = port; pthread_mutex_unlock(&s_lock); }
+static int nat_on(void) { static int on = -1; if (on < 0) { const char *e = getenv("W32_NET_NAT"); on = !e || atoi(e) != 0; } return on; }
+static double mono_s(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return (double)t.tv_sec + t.tv_nsec * 1e-9; }
+static void learn(const struct sockaddr_in *a)          /* a datagram arrived on the game port from a */
+{
+    if (!game_port || !nat_on()) return;
+    pthread_mutex_lock(&s_lock);
+    int k = 0, old = 0; for (; k < 64 && learned[k].ip != a->sin_addr.s_addr; k++) if (learned[k].t < learned[old].t) old = k;
+    if (k == 64) k = old;
+    learned[k].ip = a->sin_addr.s_addr; learned[k].port = ntohs(a->sin_port); learned[k].t = mono_s();
+    pthread_mutex_unlock(&s_lock);
+}
+static void nat_dest(struct sockaddr_in *a)             /* to a peer's game port: the port its router uses */
+{
+    if (!game_port || !nat_on() || ntohs(a->sin_port) != game_port) return;
+    pthread_mutex_lock(&s_lock);
+    for (int k = 0; k < 64; k++)
+        if (learned[k].ip == a->sin_addr.s_addr && learned[k].port != game_port && mono_s() - learned[k].t < 120) { a->sin_port = htons(learned[k].port); break; }
+    pthread_mutex_unlock(&s_lock);
+}
+static int send_fd(uint32_t s, int fd)                  /* an unbound UDP socket sends from the game port */
+{
+    if (game_fd < 0 || !nat_on() || w32_netvirt()) return fd;
+    pthread_mutex_lock(&s_lock); int b = S[s - SBASE].bound, g = game_fd; pthread_mutex_unlock(&s_lock);
+    int type = 0; socklen_t tl = sizeof type; getsockopt(fd, SOL_SOCKET, SO_TYPE, &type, &tl);
+    return !b && type == SOCK_DGRAM && g >= 0 ? g : fd;
+}
+/* The game searches (df_net.c): datagrams to 255.255.255.254 go to every host the game list knows and to the local
+ * network. Netsock keeps sending to the address it searched (the broadcast address or that one) once it has joined a
+ * game, so from then on those go to the host that was joined only. w32_send_drop: datagrams not sent at all. */
+int (*w32_search_targets)(uint32_t *ip, uint16_t *port, int cap, uint16_t game_port);
+int (*w32_send_drop)(uint32_t ip, uint16_t port);       /* network order ip, host order port */
+void (*w32_recv_filter)(uint8_t *buf, uint32_t n, uint32_t ip, uint16_t port);   /* a datagram received (df_net.c) */
+#define SEARCH_ADDR 0xfffffffeu                      /* 255.255.255.254 */
+static uint32_t session_host;                           /* network order; 0: none joined */
+void w32_set_session_host(uint32_t ip) { pthread_mutex_lock(&s_lock); session_host = ip; pthread_mutex_unlock(&s_lock); }
 IMPL(wsock32, ord23)                                    /* socket(af, type, protocol) */
 {
     uint32_t af = ARG(0), type = ARG(1), proto = ARG(2);
@@ -142,15 +191,24 @@ IMPL(wsock32, ord23)                                    /* socket(af, type, prot
 IMPL(wsock32, ord3)                                     /* closesocket(s) */
 {
     SOCK(ARG(0), 1);
-    pthread_mutex_lock(&s_lock); S[ARG(0) - SBASE].fd = 0; pthread_mutex_unlock(&s_lock);
-    close(fd); RET(0, 1);
+    pthread_mutex_lock(&s_lock); S[ARG(0) - SBASE].fd = 0; int was_game = fd == game_fd; if (was_game) game_fd = -1; uint16_t gp = game_port; pthread_mutex_unlock(&s_lock);
+    close(fd);
+    if (was_game && w32_game_port_closed) w32_game_port_closed(gp);
+    RET(0, 1);
 }
 IMPL(wsock32, ord2)                                     /* bind(s, addr, len) */
 {
     SOCK(ARG(0), 3); struct sockaddr_in a; if (!to_host(ARG(1), ARG(2), &a)) RET(fail(c, 10014), 3);
     if (w32_netvirt()) { uint16_t vp = ntohs(a.sin_port); if (!vp) { pthread_mutex_lock(&s_lock); vp = (uint16_t)vnext++; pthread_mutex_unlock(&s_lock); } vlocal(&a, vp); }
     if (bind(fd, (struct sockaddr *)&a, sizeof a)) RET(fail_errno(c), 3);
-    pthread_mutex_lock(&s_lock); S[ARG(0) - SBASE].bound = 1; pthread_mutex_unlock(&s_lock);
+    pthread_mutex_lock(&s_lock); S[ARG(0) - SBASE].bound = 1;
+    { struct sockaddr_in g = {0}; socklen_t gl = sizeof g; int type = 0; socklen_t tl = sizeof type;
+      getsockopt(fd, SOL_SOCKET, SO_TYPE, &type, &tl);
+      if (game_port && type == SOCK_DGRAM && !getsockname(fd, (struct sockaddr *)&g, &gl)) {
+          if (w32_netvirt()) vguest(&g);
+          if (ntohs(g.sin_port) == game_port) game_fd = fd;
+      } }
+    pthread_mutex_unlock(&s_lock);
     RET(0, 3);
 }
 IMPL(wsock32, ord4)                                     /* connect(s, addr, len) */
@@ -192,6 +250,31 @@ IMPL(wsock32, ord16)                                    /* recv(s, buf, len, fla
 IMPL(wsock32, ord20)                                    /* sendto(s, buf, len, flags, to, tolen) */
 {
     SOCK(ARG(0), 6); struct sockaddr_in a; ssize_t n;
+    if (ARG(4) && getenv("W32_NETLOG") && to_host(ARG(4), ARG(5), &a)) { char ip[32]; inet_ntop(AF_INET, &a.sin_addr, ip, sizeof ip); fprintf(stderr, "net: sendto %x %u bytes to %s:%u\n", ARG(0), ARG(2), ip, ntohs(a.sin_port)); }
+    if (ARG(4) && to_host(ARG(4), ARG(5), &a)) {
+        if (w32_send_drop && w32_send_drop(a.sin_addr.s_addr, ntohs(a.sin_port))) RET(ARG(2), 6);
+        uint32_t d = ntohl(a.sin_addr.s_addr);
+        if ((d == SEARCH_ADDR || d == 0xffffffffu) && session_host) {           /* a joined game: its host */
+            uint32_t to = ARG(4); uint8_t keep[16]; memcpy(keep, GP(to), 16); memcpy(GP(to + 4), &session_host, 4);
+            uint32_t saved_esp = c->esp; imp_wsock32_ord20(c); c->esp = saved_esp; uint32_t r = c->eax;
+            memcpy(GP(to), keep, 16); RET(r, 6);
+        }
+    }
+    if (ARG(4) && w32_search_targets && to_host(ARG(4), ARG(5), &a) && a.sin_addr.s_addr == htonl(SEARCH_ADDR)) {
+        uint32_t ips[160]; uint16_t ports[160]; int nt = w32_search_targets(ips, ports, 160, ntohs(a.sin_port));
+        uint32_t to = ARG(4); uint8_t keep[16]; memcpy(keep, GP(to), 16);
+        for (int k = 0; k < nt; k++) {                    /* each through the ordinary path below (the virtual network, NAT) */
+            memcpy(GP(to + 2), &(uint16_t){htons(ports[k])}, 2); memcpy(GP(to + 4), &ips[k], 4);
+            uint32_t saved_esp = c->esp; imp_wsock32_ord20(c); c->esp = saved_esp;
+        }
+        memcpy(GP(to), keep, 16);
+        RET(ARG(2), 6);
+    }
+    if (ARG(4) && !w32_netvirt() && to_host(ARG(4), ARG(5), &a)) {
+        nat_dest(&a); n = sendto(send_fd(ARG(0), fd), GP(ARG(1)), ARG(2), (int)(ARG(3) & 1) | MSG_NOSIGNAL, (struct sockaddr *)&a, sizeof a);
+        if (n < 0) RET(fail_errno(c), 6);
+        RET((uint32_t)n, 6);
+    }
     if (ARG(4) && w32_netvirt()) {
         if (!to_host(ARG(4), ARG(5), &a)) RET(fail(c, 10014), 6);
         uint32_t d = ntohl(a.sin_addr.s_addr); uint16_t vp = ntohs(a.sin_port);
@@ -214,6 +297,10 @@ IMPL(wsock32, ord17)                                    /* recvfrom(s, buf, len,
     SOCK(ARG(0), 6); struct sockaddr_in a; socklen_t l = sizeof a; memset(&a, 0, sizeof a);
     ssize_t n = recvfrom(fd, GP(ARG(1)), ARG(2), (int)(ARG(3) & 3), (struct sockaddr *)&a, &l);
     if (n < 0) RET(fail_errno(c), 6);
+    if (getenv("W32_NETLOG")) { char ip[32]; inet_ntop(AF_INET, &a.sin_addr, ip, sizeof ip); fprintf(stderr, "net: recvfrom %x %zd bytes from %s:%u\n", ARG(0), n, ip, ntohs(a.sin_port));
+        static int dumps; if (getenv("W32_NETDUMP") && dumps++ < 3) { for (ssize_t k = 0; k < n; k++) fprintf(stderr, "%s%02x", k % 32 ? " " : "\n  ", G_MEM[ARG(1) + (uint32_t)k]); fprintf(stderr, "\n"); } }
+    if (fd == game_fd && !w32_netvirt()) learn(&a);
+    if (w32_recv_filter && n > 0) { struct sockaddr_in from = a; if (w32_netvirt()) vguest(&from); w32_recv_filter(GP(ARG(1)), (uint32_t)n, from.sin_addr.s_addr, ntohs(from.sin_port)); }
     if (w32_netvirt()) vguest(&a);
     if (ARG(4)) to_guest(&a, ARG(4), ARG(5));
     RET((uint32_t)n, 6);

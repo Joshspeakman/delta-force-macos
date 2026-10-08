@@ -3,6 +3,7 @@
  * are mapped on the router with NAT-PMP (RFC 6886), or failing that UPnP IGD (WANIPConnection / WANPPPConnection);
  * the mapping is renewed while the game runs and removed when hosting ends. The router's public address is also
  * learned, so the game can show it. DS_NO_PORTMAP=1 leaves the router alone. */
+#include "edition.h"
 #include <arpa/inet.h>
 #include <net/route.h>
 #include <netinet/in.h>
@@ -198,7 +199,7 @@ static int upnp_map(uint16_t port, uint32_t lan, int add)
     for (int lease = 3600; ; lease = 0) {            /* some routers only take permanent mappings (lease 0) */
         snprintf(args, sizeof args, "<NewRemoteHost></NewRemoteHost><NewExternalPort>%u</NewExternalPort><NewProtocol>UDP</NewProtocol>"
                  "<NewInternalPort>%u</NewInternalPort><NewInternalClient>%s</NewInternalClient><NewEnabled>1</NewEnabled>"
-                 "<NewPortMappingDescription>Dungeon Siege</NewPortMappingDescription><NewLeaseDuration>%d</NewLeaseDuration>",
+                 "<NewPortMappingDescription>" DS2_TITLE "</NewPortMappingDescription><NewLeaseDuration>%d</NewLeaseDuration>",
                  port, port, lanip, lease);
         if (!upnp_call("AddPortMapping", args, out, sizeof out)) return lease;
         if (!lease) return -1;
@@ -247,7 +248,7 @@ static void *pm_thread(void *arg)
             fprintf(stderr, "portmap: UDP %u%s%u forwarded to %s by the router (%s)%s%s\n", ports[0], n > 1 ? " and " : "", n > 1 ? ports[1] : 0, lip,
                     method == 1 ? "NAT-PMP" : "UPnP", *p ? "; players on the internet can join " : "", p);
         } else if (!ok && !pm.method) fprintf(stderr, "portmap: the router did not forward the game's ports (no NAT-PMP or UPnP); players outside "
-                                                  "this network need the ports forwarded by hand (UDP 2302 and 6073)\n");
+                                                  "this network need them forwarded by hand (UDP %u%s%.0u)\n", ports[0], n > 1 ? " and " : "", n > 1 ? ports[1] : 0);
         if (!ok) break;
         /* renew at half the lease (permanent UPnP mappings: check every 30 min that they are still there) */
         struct timespec ts; clock_gettime(CLOCK_REALTIME, &ts); ts.tv_sec += lease > 0 ? lease / 2 : 1800;
