@@ -70,7 +70,32 @@ DF_HOOKS = {
         },
     },
     'frame': {'df1': {}, 'df2': {}},
-    'res': {'df1': {}, 'df2': {}},
+    'res': {
+        'df1': {
+            0x00496510: 'set a video mode (w, h, windowed): 1024x768 renders at the screen\'s shape',
+            0x00407af0: 'max_res just read from df.cfg: raised so the custom size can be chosen',
+            0x0044a8fc: 'projection set-up: the half angle in ST(0) widened for screens wider than 4:3 (Hor+)',
+            0x00428810: 'HUD pictures (weap/pos%i.pcx): the set of the 4:3 screen of the same height',
+            0x00402d50: 'small font (f_sml%i.pcx): likewise',
+            0x00473c9c: 'end of the 2D clip reset (1023x767): to the screen\'s edges',
+        },
+        'df2': {
+            0x0047a2d0: 'set the software display (w, h, windowed): 1024x768 renders at the screen\'s shape',
+            0x00425d50: 'Hardware: the driver\'s set-mode call (w, h, 32, 1), likewise',
+            0x00426000: 'Hardware: the driver\'s set-mode call on a change of size, likewise',
+            0x004260d4: 'Hardware: the size of its terrain and depth copy (0xa6df74/78)',
+            0x0046678e: 'z buffer allocated by size choice: 4*W*H',
+            0x004661da: 'main view: the projection request\'s field of view widened (Hor+)',
+            0x004665e0: 'HUD bitmaps and HUD.DEF section: the set of the 4:3 screen of the same height',
+            0x004672c0: 'likewise (mission start)',
+            0x004665e5: 'after them: the layout moved to where that set sits on the screen',
+            0x004672c5: 'likewise (mission start)',
+            0x0044878e: 'top HUD bar (a linear copy): centred, row by row',
+            0x0044864d: 'bottom HUD bar: likewise',
+            0x004487a1: 'message lines in the top bar: spaced by the bitmap set\'s width, not the screen\'s',
+            0x00448e68: 'recent-messages list: likewise',
+        },
+    },
     'hw': {
         'df1': {
             0x004856f8: 'the 3D frame: the objects begin (GPU segment opens; colour and depth go up with the first polygon)',
