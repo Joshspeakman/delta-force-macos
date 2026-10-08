@@ -47,12 +47,12 @@ static void *node_thread(void *arg)
         struct sockaddr_in a; socklen_t al = sizeof a; ssize_t n = recvfrom(me->fd, buf, sizeof buf, 0, (struct sockaddr *)&a, &al);
         if (n <= 0) continue;
         size_t tl, ql; const uint8_t *t = find(buf, (size_t)n, "t", &tl), *q = find(buf, (size_t)n, "q", &ql);
-        if (!t || !q || tl != 2) continue;
+        if (!t || !q || tl < 1 || tl > 8) continue;
         size_t o = 0;
         if (me->bad) asked_bad[me - N]++;
         if (me->bad == 1) continue;                                       /* silent */
         if (me->bad == 2) { o = (size_t)snprintf((char *)out, sizeof out, "d1:rd2:id20:"); memcpy(out + o, me->id, 20); o += 20; memcpy(out + o, "5:nodes999:xx", 13); o += 13; sendto(me->fd, out, o, 0, (struct sockaddr *)&a, al); continue; }   /* truncated */
-        uint8_t tt[2] = {t[0], t[1]}; if (me->bad == 3) tt[0] ^= 0x55;    /* someone else's transaction */
+        uint8_t tt[8]; memcpy(tt, t, tl); if (me->bad == 3) tt[0] ^= 0x55;   /* someone else's transaction */
         if (ql == 9 && !memcmp(q, "get_peers", 9)) {
             uint8_t near[NODES]; int nn = 0;
             for (int i = 0; i < NODES; i++) if (&N[i] != me) near[nn++] = (uint8_t)i;
@@ -80,7 +80,7 @@ static void *node_thread(void *arg)
             pthread_mutex_unlock(&lk);
             o = (size_t)snprintf((char *)out, sizeof out, "d1:rd2:id20:"); memcpy(out + o, me->id, 20); o += 20;
         } else continue;
-        o += (size_t)snprintf((char *)out + o, sizeof out - o, "e1:t2:"); out[o++] = tt[0]; out[o++] = tt[1];
+        o += (size_t)snprintf((char *)out + o, sizeof out - o, "e1:t%zu:", tl); memcpy(out + o, tt, tl); o += tl;
         o += (size_t)snprintf((char *)out + o, sizeof out - o, "1:y1:re");
         sendto(me->fd, out, o, 0, (struct sockaddr *)&a, al);
     }

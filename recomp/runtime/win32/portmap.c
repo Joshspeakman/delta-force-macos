@@ -1,6 +1,6 @@
 /* Router port mapping, so a game hosted on this Mac can be joined over the internet without forwarding ports by hand
- * (what Microsoft's DirectPlay did with its UPnP helper). While hosting, UDP 2302 (the game) and 6073 (enumeration)
- * are mapped on the router with NAT-PMP (RFC 6886), or failing that UPnP IGD (WANIPConnection / WANPPPConnection);
+ * (what Microsoft's DirectPlay did with its UPnP helper). While hosting, the game's UDP ports (Dungeon Siege II: 2302
+ * and enumeration 6073; Delta Force: 3568) are mapped on the router with NAT-PMP (RFC 6886), or failing that UPnP IGD (WANIPConnection / WANPPPConnection);
  * the mapping is renewed while the game runs and removed when hosting ends. The router's public address is also
  * learned, so the game can show it. DS_NO_PORTMAP=1 leaves the router alone. */
 #include "edition.h"
@@ -224,6 +224,7 @@ uint32_t portmap_public_ip(void)
 /* ---- mapping while hosting ---- */
 static struct { int active, stop; uint16_t ports[2]; int nports; int method; uint32_t gw, lan; pthread_t th; pthread_cond_t cv; } pm =
     {0, 0, {0, 0}, 0, 0, 0, 0, 0, PTHREAD_COND_INITIALIZER};
+static void record_write(int method, const uint16_t *ports, int n, uint32_t lan);   /* below */
 static void *pm_thread(void *arg)
 {
     (void)arg;
@@ -243,7 +244,7 @@ static void *pm_thread(void *arg)
         }
         pthread_mutex_lock(&pm_lock);
         if (ok && !pm.method) {
-            pm.method = method;
+            pm.method = method; record_write(method, ports, n, lan);
             char p[32] = "", lip[32]; uint32_t pub = public_ip; inet_ntop(AF_INET, &lan, lip, sizeof lip); if (pub) inet_ntop(AF_INET, &pub, p, sizeof p);
             fprintf(stderr, "portmap: UDP %u%s%u forwarded to %s by the router (%s)%s%s\n", ports[0], n > 1 ? " and " : "", n > 1 ? ports[1] : 0, lip,
                     method == 1 ? "NAT-PMP" : "UPnP", *p ? "; players on the internet can join " : "", p);
@@ -257,9 +258,48 @@ static void *pm_thread(void *arg)
     pthread_mutex_unlock(&pm_lock);
     return 0;
 }
+/* A forward made is written down in the data folder until it is removed, so one left behind by a crash or a killed
+ * game (a UPnP router that takes only permanent forwards keeps it for ever) is removed the next time the game starts
+ * (portmap_cleanup) or hosts. Lines: method (1 NAT-PMP, 2 UPnP), port, LAN address. */
+static void record_path(char *out, size_t cap)
+{
+    extern char w32_drive_c[1024];
+    if (!w32_drive_c[0]) { out[0] = 0; return; }
+    snprintf(out, cap, "%s/../portmap-open.txt", w32_drive_c);
+}
+static void record_write(int method, const uint16_t *ports, int n, uint32_t lan)
+{
+    char p[1200]; record_path(p, sizeof p); if (!*p) return;
+    FILE *f = fopen(p, "w"); if (!f) return;
+    for (int i = 0; i < n; i++) fprintf(f, "%d %u %u\n", method, ports[i], lan);
+    fclose(f);
+}
+static void record_remove(void) { char p[1200]; record_path(p, sizeof p); if (*p) unlink(p); }
+static void *cleanup_thread(void *arg)
+{
+    (void)arg; char p[1200]; record_path(p, sizeof p); if (!*p) return 0;
+    FILE *f = fopen(p, "r"); if (!f) return 0;
+    int method; unsigned port, lan; uint32_t gw = gateway(); int n = 0;
+    while (fscanf(f, "%d %u %u", &method, &port, &lan) == 3) {
+        if (method == 1 && gw) natpmp_map(gw, (uint16_t)port, 0);
+        else if (method == 2) upnp_map((uint16_t)port, lan, 0);
+        n++;
+    }
+    fclose(f); unlink(p);
+    if (n) fprintf(stderr, "portmap: removed %d forward%s left from an earlier run\n", n, n == 1 ? "" : "s");
+    return 0;
+}
+void portmap_cleanup(void)                       /* at start: forwards an earlier run left (in the background) */
+{
+    static int done; if (done++ || getenv("DS_NO_PORTMAP")) return;
+    pthread_t t; if (!pthread_create(&t, 0, cleanup_thread, 0)) pthread_detach(t);
+}
+static void close_at_exit(void) { void portmap_close(void); portmap_close(); }
 void portmap_open(uint16_t game_port, uint16_t enum_port)
 {
     if (getenv("DS_NO_PORTMAP")) return;
+    { static int once; if (!once++) atexit(close_at_exit); }
+    cleanup_thread(0);
     portmap_public_ip();
     pthread_mutex_lock(&pm_lock);
     if (pm.active) { pthread_mutex_unlock(&pm_lock); return; }
@@ -281,7 +321,7 @@ void portmap_close(void)
         if (pm.method == 1) natpmp_map(pm.gw, pm.ports[i], 0);
         else if (pm.method == 2) upnp_map(pm.ports[i], pm.lan, 0);
     }
-    if (pm.method) fprintf(stderr, "portmap: the game's ports are no longer forwarded\n");
+    if (pm.method) { fprintf(stderr, "portmap: the game's ports are no longer forwarded\n"); record_remove(); }
     pm.active = 0; pm.method = 0;
     pthread_mutex_unlock(&pm_lock);
 }

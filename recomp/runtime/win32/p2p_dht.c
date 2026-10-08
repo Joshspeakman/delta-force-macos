@@ -26,7 +26,7 @@ enum { K = 8, MAXC = 160, MAXGOOD = 256, MAXPEERS = 512, MAXANN = 16, INFLIGHT =
 static const char *ROUTERS = "router.bittorrent.com:6881,dht.transmissionbt.com:6881,router.utorrent.com:6881,dht.libtorrent.org:25401";
 
 enum { C_NEW, C_SENT, C_DONE, C_FAIL };
-typedef struct { uint8_t id[20]; int has_id; uint32_t ip; uint16_t port; int state; double sent; uint16_t tid; uint8_t token[64]; int toklen; } Cand;
+typedef struct { uint8_t id[20]; int has_id; uint32_t ip; uint16_t port; int state; double sent; uint32_t tid; uint8_t token[64]; int toklen; } Cand;
 struct P2pDht {
     uint8_t key[20], self[20];
     int fd; pthread_t th; pthread_mutex_t m; int stop;
@@ -35,8 +35,8 @@ struct P2pDht {
     int active; Cand c[MAXC]; int nc; double started;
     struct { uint8_t id[20]; uint32_t ip; uint16_t port; } good[MAXGOOD]; int ngood;
     struct { uint32_t ip; uint16_t port; double seen; } peers[MAXPEERS]; int npeers;
-    uint16_t ann_tid[MAXANN]; int nann;
-    int nodes_ok, lookups, announced; uint16_t tid;
+    uint32_t ann_tid[MAXANN]; int nann;
+    int nodes_ok, lookups, announced; uint64_t rng; int local_ok;
 };
 
 static int dlog = -1;                                      /* P2P_DHT_LOG=1: each lookup's progress on stderr */
@@ -127,24 +127,41 @@ static void send_to(P2pDht *d, uint32_t ip, uint16_t port, const uint8_t *msg, s
     a.sin_family = AF_INET; a.sin_addr.s_addr = ip; a.sin_port = htons(port);
     sendto(d->fd, msg, n, 0, (struct sockaddr *)&a, sizeof a);
 }
-static uint16_t new_tid(P2pDht *d) { return ++d->tid ? d->tid : ++d->tid; }
+/* transaction ids: 32 random bits (xorshift seeded from the system), so an answer can't be forged by someone who doesn't
+ * see the query */
+static uint32_t new_tid(P2pDht *d)
+{
+    uint64_t x = d->rng; x ^= x << 13; x ^= x >> 7; x ^= x << 17; d->rng = x;
+    return (uint32_t)(x >> 16) | 1;
+}
+/* Addresses taken from other nodes: only public ones, unless the bootstrap nodes are themselves on this computer or a
+ * private network (tests, a LAN). Otherwise a node could have this one send to machines on the player's own network. */
+static int addr_ok(const P2pDht *d, uint32_t ip, uint16_t port)
+{
+    uint32_t h = ntohl(ip);
+    if (!ip || port < 1024) return 0;
+    if (d->local_ok) return 1;
+    return !((h >> 24) == 0 || (h >> 24) == 10 || (h >> 24) == 127 || (h >> 20) == 0xac1 || (h >> 16) == 0xc0a8 ||
+             (h >> 22) == (100 << 2 | 1) || (h >> 16) == 0xa9fe || (h >> 28) >= 0xe ||
+             (h >> 8) == 0xc00000 || (h >> 8) == 0xc00002 || (h >> 8) == 0xc63364 || (h >> 8) == 0xcb0071 || (h >> 17) == (198 << 7 | 9));
+}
 static void query_get_peers(P2pDht *d, Cand *c)
 {
-    uint8_t m[256]; size_t n = 0; uint8_t t[2];
-    c->tid = new_tid(d); t[0] = (uint8_t)(c->tid >> 8); t[1] = (uint8_t)c->tid;
+    uint8_t m[256]; size_t n = 0; uint8_t t[4];
+    c->tid = new_tid(d); for (int k = 0; k < 4; k++) t[k] = (uint8_t)(c->tid >> (24 - 8 * k));
     n = put(m, n, "d1:ad2:id", 9); n = put_str(m, n, d->self, 20); n = put(m, n, "9:info_hash", 11); n = put_str(m, n, d->key, 20);
-    n = put(m, n, "e1:q9:get_peers2:roi1e1:t", 25); n = put_str(m, n, t, 2); n = put(m, n, "1:y1:qe", 7);
+    n = put(m, n, "e1:q9:get_peers2:roi1e1:t", 25); n = put_str(m, n, t, 4); n = put(m, n, "1:y1:qe", 7);
     send_to(d, c->ip, c->port, m, n);
     c->state = C_SENT; c->sent = now_s();
 }
 static void query_announce(P2pDht *d, Cand *c)
 {
-    uint8_t m[400]; size_t n = 0; uint8_t t[2]; char pi[32];
-    uint16_t tid = new_tid(d); t[0] = (uint8_t)(tid >> 8); t[1] = (uint8_t)tid;
+    uint8_t m[400]; size_t n = 0; uint8_t t[4]; char pi[32];
+    uint32_t tid = new_tid(d); for (int k = 0; k < 4; k++) t[k] = (uint8_t)(tid >> (24 - 8 * k));
     n = put(m, n, "d1:ad2:id", 9); n = put_str(m, n, d->self, 20); n = put(m, n, "9:info_hash", 11); n = put_str(m, n, d->key, 20);
     int k = snprintf(pi, sizeof pi, "4:porti%ue", d->ann_port); n = put(m, n, pi, (size_t)k);
     n = put(m, n, "5:token", 7); n = put_str(m, n, c->token, (size_t)c->toklen);
-    n = put(m, n, "e1:q13:announce_peer2:roi1e1:t", 30); n = put_str(m, n, t, 2); n = put(m, n, "1:y1:qe", 7);
+    n = put(m, n, "e1:q13:announce_peer2:roi1e1:t", 30); n = put_str(m, n, t, 4); n = put(m, n, "1:y1:qe", 7);
     send_to(d, c->ip, c->port, m, n);
     d->ann_tid[d->nann++ % MAXANN] = tid;
 }
@@ -197,8 +214,8 @@ static void on_packet(P2pDht *d, const uint8_t *p, size_t n, uint32_t ip, uint16
 {
     const uint8_t *e = p + n, *v, *ve, *s; size_t l;
     if (!b_get(p, e, "y", &v, &ve) || !b_str(v, ve, &s, &l) || l != 1 || s[0] != 'r') { LOG("not an answer (%zu bytes, y=%c)\n", n, l == 1 ? s[0] : '?'); return; }   /* answers only */
-    if (!b_get(p, e, "t", &v, &ve) || !b_str(v, ve, &s, &l) || l != 2) return;
-    uint16_t tid = (uint16_t)(s[0] << 8 | s[1]);
+    if (!b_get(p, e, "t", &v, &ve) || !b_str(v, ve, &s, &l) || l != 4) return;
+    uint32_t tid = (uint32_t)s[0] << 24 | (uint32_t)s[1] << 16 | (uint32_t)s[2] << 8 | s[3];
     for (int i = 0; i < MAXANN; i++) if (d->ann_tid[i] == tid) { d->ann_tid[i] = 0; d->announced++; return; }
     const uint8_t *r, *re; if (!b_get(p, e, "r", &r, &re)) return;
     Cand *c = 0; for (int i = 0; i < d->nc; i++) if (d->c[i].tid == tid && d->c[i].state != C_DONE && d->c[i].ip == ip && d->c[i].port == port) { c = &d->c[i]; break; }
@@ -208,10 +225,10 @@ static void on_packet(P2pDht *d, const uint8_t *p, size_t n, uint32_t ip, uint16
     c->state = C_DONE; d->nodes_ok++;
     if (b_get(r, re, "token", &v, &ve) && b_str(v, ve, &s, &l) && l <= sizeof c->token) { memcpy(c->token, s, l); c->toklen = (int)l; }
     if (b_get(r, re, "values", &v, &ve) && *v == 'l') {
-        const uint8_t *q = v + 1;
-        while (q < ve && *q != 'e') {
+        const uint8_t *q = v + 1; int taken = 0;
+        while (q < ve && *q != 'e' && taken < 100) {      /* at most 100 hosts from one answer */
             if (!b_str(q, ve, &s, &l)) break;
-            if (l == 6) { uint32_t pip; memcpy(&pip, s, 4); peer_add(d, pip, (uint16_t)(s[4] << 8 | s[5])); }
+            if (l == 6) { uint32_t pip; memcpy(&pip, s, 4); uint16_t pp = (uint16_t)(s[4] << 8 | s[5]); if (addr_ok(d, pip, pp)) { peer_add(d, pip, pp); taken++; } }
             q = s + l;
         }
     }
@@ -220,7 +237,10 @@ static void on_packet(P2pDht *d, const uint8_t *p, size_t n, uint32_t ip, uint16
         if (!c->has_id) { memcpy(c->id, id, 20); c->has_id = 1; }
     }
     if (b_get(r, re, "nodes", &v, &ve) && b_str(v, ve, &s, &l)) {
-        for (size_t o = 0; o + 26 <= l; o += 26) { uint32_t nip; memcpy(&nip, s + o + 20, 4); cand_add(d, s + o, nip, (uint16_t)(s[o + 24] << 8 | s[o + 25])); }
+        for (size_t o = 0; o + 26 <= l && o < 26 * 16; o += 26) {   /* at most 16 nodes from one answer */
+            uint32_t nip; memcpy(&nip, s + o + 20, 4); uint16_t np = (uint16_t)(s[o + 24] << 8 | s[o + 25]);
+            if (addr_ok(d, nip, np)) cand_add(d, s + o, nip, np);
+        }
     }
 }
 static void *dht_thread(void *arg)
@@ -254,6 +274,9 @@ P2pDht *p2p_dht_start(const uint8_t key[20], const char *bootstrap)
     { int fd = open("/dev/urandom", O_RDONLY); if (fd < 0 || read(fd, d->self, 20) != 20) for (int i = 0; i < 20; i++) d->self[i] = (uint8_t)rand(); if (fd >= 0) close(fd); }
     const char *b = getenv("P2P_DHT_BOOTSTRAP"); if (!b || !*b) b = bootstrap; if (!b || !*b) b = ROUTERS;
     snprintf(d->boot, sizeof d->boot, "%s", b);
+    /* private addresses are taken from the nodes only when the bootstrap nodes are given as private addresses */
+    d->local_ok = b != ROUTERS && (!strncmp(b, "127.", 4) || !strncmp(b, "10.", 3) || !strncmp(b, "192.168.", 8) || !strncmp(b, "localhost", 9));
+    memcpy(&d->rng, d->self, 8); if (!d->rng) d->rng = 0x9e3779b97f4a7c15ull;
     d->fd = socket(AF_INET, SOCK_DGRAM, 0);
     if (d->fd < 0) { free(d); return 0; }
     fcntl(d->fd, F_SETFL, fcntl(d->fd, F_GETFL) | O_NONBLOCK); fcntl(d->fd, F_SETFD, FD_CLOEXEC);

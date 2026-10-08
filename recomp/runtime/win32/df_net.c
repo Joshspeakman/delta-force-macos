@@ -21,6 +21,7 @@
 #include "edition.h"
 #include "p2p_dht.h"
 #include <arpa/inet.h>
+#include <time.h>
 
 #ifdef DF_EDITION
 #ifdef DF2_EDITION
@@ -28,7 +29,7 @@
 #else
 #define P2P_NAME "Delta Force / NovaWorld stand-in / 1"
 #endif
-void w32_set_game_port(uint16_t port); void w32_set_session_host(uint32_t ip);
+void w32_set_game_port(uint16_t port); void w32_set_session_host(uint32_t ip); void w32_set_net_role(int role);
 extern int (*w32_send_drop)(uint32_t ip, uint16_t port);
 extern void (*w32_recv_filter)(uint8_t *buf, uint32_t n, uint32_t ip, uint16_t port);
 extern void (*w32_game_port_closed)(uint16_t port);
@@ -36,6 +37,7 @@ extern int (*w32_search_targets)(uint32_t *ip, uint16_t *port, int cap, uint16_t
 void portmap_open(uint16_t game_port, uint16_t enum_port); void portmap_close(void);
 static pthread_mutex_t p2p_lock = PTHREAD_MUTEX_INITIALIZER;
 static P2pDht *dht; static uint16_t hosting_port; static int searching;
+static struct { uint32_t ip; uint16_t port; int sent, answered; double first; } tried[256]; static int ntried;
 static P2pDht *p2p(void)
 {
     pthread_mutex_lock(&p2p_lock);
@@ -65,7 +67,18 @@ static int search_targets(uint32_t *ip, uint16_t *port, int cap, uint16_t game_p
     ip[n] = 0xffffffffu; port[n++] = game_port;          /* the local network */
     P2pDht *d = p2p(); if (!d) return n;
     if (!searching) { searching = 1; p2p_dht_search(d, 20); fprintf(stderr, "df: NovaWorld: looking for games on the DHT\n"); }
-    n += p2p_dht_peers(d, ip + n, port + n, cap - n);
+    /* anyone can announce any address on the DHT: a listed address that has not answered 8 searches is not asked again
+     * for 10 minutes, so junk entries can't keep players sending to someone else's computer */
+    uint32_t pip[160]; uint16_t pport[160]; int np = p2p_dht_peers(d, pip, pport, cap - n < 160 ? cap - n : 160);
+    double now = (double)time(0);
+    pthread_mutex_lock(&p2p_lock);
+    for (int k = 0; k < np; k++) {
+        int i = 0, old = 0; for (; i < ntried && !(tried[i].ip == pip[k] && tried[i].port == pport[k]); i++) if (tried[i].first < tried[old].first) old = i;
+        if (i == ntried) { if (ntried < 256) ntried++; else i = old; tried[i].ip = pip[k]; tried[i].port = pport[k]; tried[i].sent = 0; tried[i].answered = 0; tried[i].first = now; }
+        if (!tried[i].answered && tried[i].sent >= 8) { if (now - tried[i].first < 600) continue; tried[i].sent = 0; tried[i].first = now; }
+        tried[i].sent++; ip[n] = pip[k]; port[n] = pport[k]; n++;
+    }
+    pthread_mutex_unlock(&p2p_lock);
     static int last = -1; if (n - 1 != last) { last = n - 1; fprintf(stderr, "df: NovaWorld: %d host%s known\n", last, last == 1 ? "" : "s"); }
     return n;
 }
@@ -90,6 +103,7 @@ static void received(uint8_t *b, uint32_t n, uint32_t ip, uint16_t port);
 static void net_init(void)
 {
     static int done; if (done++) return;
+    void portmap_cleanup(void); portmap_cleanup();    /* a forward an earlier run left on the router */
     w32_game_port_closed = hosting_ended; w32_search_targets = search_targets; w32_send_drop = send_drop; w32_recv_filter = received;
 }
 /* Which host was chosen. Netsock's session descriptor (0x100 bytes: the game's id at +0xe0) has a 16-byte instance id
@@ -111,6 +125,9 @@ static void received(uint8_t *b, uint32_t n, uint32_t ip, uint16_t port)
     if (k == nsenders) { if (nsenders == 64) { memmove(senders, senders + 1, sizeof senders[0] * 63); k = 63; } else nsenders++; }
     memcpy(senders[k].id, b + 8 + 0xd0, 16); senders[k].ip = ip;
     pthread_mutex_unlock(&snd_lock);
+    pthread_mutex_lock(&p2p_lock);
+    for (int i = 0; i < ntried; i++) if (tried[i].ip == ip) tried[i].answered = 1;
+    pthread_mutex_unlock(&p2p_lock);
 }
 static void hosting_session(uint32_t desc)
 {
@@ -188,12 +205,12 @@ int df_net_hook(Ctx *c, uint32_t addr)
     switch (addr) {
 #ifdef DF2_EDITION
     case 0x0045c38du:                                    /* host; esi: the game port */
-        w32_set_game_port((uint16_t)c->esi);
+        w32_set_game_port((uint16_t)c->esi); w32_set_net_role(1);
         if (c->eax == 0) { c->eax = 1; host_address(c->esp + 0x14); lan_note("host"); }
         else if (c->eax == 4) host_public((uint16_t)c->esi);
         return 1;
     case 0x0040861du:                                    /* join; esi: the game port */
-        w32_set_game_port((uint16_t)c->esi); w32_set_session_host(0);
+        w32_set_game_port((uint16_t)c->esi); w32_set_session_host(0); w32_set_net_role(2);
         if (c->eax == 0) { c->eax = 1; rt_w32(G_MEM, c->esp + 0x14, broadcast_address()); lan_note("join (broadcast search)"); }
         else if (c->eax == 4) { c->eax = 1; rt_w32(G_MEM, c->esp + 0x14, search_address()); }
         return 1;
@@ -203,12 +220,12 @@ int df_net_hook(Ctx *c, uint32_t addr)
     case 0x004b9156u: joining(rt_r32(G_MEM, c->esp)); return 1;
     case 0x004b92c4u: hosting_session(rt_r32(G_MEM, c->esp)); return 1;
     case 0x0044691fu:                                    /* host (Netsock on 3568) */
-        w32_set_game_port(3568);
+        w32_set_game_port(3568); w32_set_net_role(1);
         if (c->eax == 0) { c->eax = 1; host_address(c->esp + 0x18); lan_note("host"); }
         else if (c->eax == 4) host_public(3568);
         return 1;
     case 0x00470c13u:                                    /* join */
-        w32_set_game_port(3568); w32_set_session_host(0);
+        w32_set_game_port(3568); w32_set_session_host(0); w32_set_net_role(2);
         if (c->eax == 0) { c->eax = 1; c->edi = broadcast_address(); lan_note("join (broadcast search)"); }
         else if (c->eax == 4) { c->eax = 1; c->edi = search_address(); }
         return 1;

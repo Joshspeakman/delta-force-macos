@@ -3,6 +3,8 @@
  * levels and error codes are translated. (Router port forwarding is separate: portmap.c, off with DS_NO_PORTMAP=1.) */
 #include "w32.h"
 #include <arpa/inet.h>
+#include <ifaddrs.h>
+#include <net/if.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <netinet/in.h>
@@ -172,6 +174,68 @@ void (*w32_recv_filter)(uint8_t *buf, uint32_t n, uint32_t ip, uint16_t port);  
 #define SEARCH_ADDR 0xfffffffeu                      /* 255.255.255.254 */
 static uint32_t session_host;                           /* network order; 0: none joined */
 void w32_set_session_host(uint32_t ip) { pthread_mutex_lock(&s_lock); session_host = ip; pthread_mutex_unlock(&s_lock); }
+
+/* Who may talk to a player who joins (df_net.c sets the role). A host must take datagrams from anyone (that is what a
+ * public game is), but a joining player only needs answers from the hosts it asked and, once in a game, its host:
+ *   - joined: datagrams on the game port from any other address are dropped;
+ *   - searching: only from addresses this copy sent to in the last 5 minutes, or from the local network after a
+ *     broadcast search.
+ * So the game's 1998 network code, on a joining player's computer, is reachable only by the host the player chose.
+ * W32_NET_FILTER=0 turns it off. */
+static int net_role;                                    /* 0 none, 1 hosting, 2 joining */
+static int fd_is_game_side(uint32_t s, int fd)          /* the game port's socket, or an unbound one sending for it */
+{
+    if (fd == game_fd) return 1;
+    pthread_mutex_lock(&s_lock); int b = S[s - SBASE].bound; pthread_mutex_unlock(&s_lock);
+    return !b && game_port;
+}
+static struct { uint32_t ip; double t; } asked[128]; static int nasked; static double broadcast_t;
+void w32_set_net_role(int role) { pthread_mutex_lock(&s_lock); net_role = role; pthread_mutex_unlock(&s_lock); }
+static void note_sent(uint32_t ip)                      /* network order, as the game addressed it */
+{
+    pthread_mutex_lock(&s_lock);
+    if (ip == 0xffffffffu) broadcast_t = mono_s();
+    else {
+        int k = 0, old = 0; for (; k < nasked && asked[k].ip != ip; k++) if (asked[k].t < asked[old].t) old = k;
+        if (k == nasked) { if (nasked < 128) nasked++; else k = old; }
+        asked[k].ip = ip; asked[k].t = mono_s();
+    }
+    pthread_mutex_unlock(&s_lock);
+}
+static int on_local_network(uint32_t ip)
+{
+    static struct { uint32_t a, m; } nets[16]; static int nn = -1; static pthread_mutex_t l = PTHREAD_MUTEX_INITIALIZER;
+    pthread_mutex_lock(&l);
+    if (nn < 0) {
+        nn = 0; struct ifaddrs *ifs = 0;
+        if (!getifaddrs(&ifs)) {
+            for (struct ifaddrs *i = ifs; i && nn < 16; i = i->ifa_next)
+                if (i->ifa_addr && i->ifa_netmask && i->ifa_addr->sa_family == AF_INET && (i->ifa_flags & IFF_UP)) {
+                    nets[nn].a = ((struct sockaddr_in *)i->ifa_addr)->sin_addr.s_addr; nets[nn].m = ((struct sockaddr_in *)i->ifa_netmask)->sin_addr.s_addr; nn++;
+                }
+            freeifaddrs(ifs);
+        }
+    }
+    int ok = 0; for (int k = 0; k < nn; k++) if (((ip ^ nets[k].a) & nets[k].m) == 0) ok = 1;
+    pthread_mutex_unlock(&l);
+    return ok;
+}
+static int allowed(uint32_t ip)                         /* ip: the sender as the game sees it (network order) */
+{
+    static int on = -1; if (on < 0) { const char *e = getenv("W32_NET_FILTER"); on = !e || atoi(e) != 0; }
+    if (!on) return 1;
+    pthread_mutex_lock(&s_lock);
+    int role = net_role, ok = 1; uint32_t host = session_host; double now = mono_s();
+    if (role == 2) {
+        if (host) ok = ip == host;
+        else {
+            ok = 0; for (int k = 0; k < nasked; k++) if (asked[k].ip == ip && now - asked[k].t < 300) ok = 1;
+            if (!ok && now - broadcast_t < 300) { pthread_mutex_unlock(&s_lock); ok = on_local_network(ip) || (ntohl(ip) >> 24) == 127; return ok; }
+        }
+    }
+    pthread_mutex_unlock(&s_lock);
+    return ok;
+}
 IMPL(wsock32, ord23)                                    /* socket(af, type, protocol) */
 {
     uint32_t af = ARG(0), type = ARG(1), proto = ARG(2);
@@ -250,6 +314,7 @@ IMPL(wsock32, ord16)                                    /* recv(s, buf, len, fla
 IMPL(wsock32, ord20)                                    /* sendto(s, buf, len, flags, to, tolen) */
 {
     SOCK(ARG(0), 6); struct sockaddr_in a; ssize_t n;
+    if (ARG(4) && fd_is_game_side(ARG(0), fd) && to_host(ARG(4), ARG(5), &a)) note_sent(a.sin_addr.s_addr);
     if (ARG(4) && getenv("W32_NETLOG") && to_host(ARG(4), ARG(5), &a)) { char ip[32]; inet_ntop(AF_INET, &a.sin_addr, ip, sizeof ip); fprintf(stderr, "net: sendto %x %u bytes to %s:%u\n", ARG(0), ARG(2), ip, ntohs(a.sin_port)); }
     if (ARG(4) && to_host(ARG(4), ARG(5), &a)) {
         if (w32_send_drop && w32_send_drop(a.sin_addr.s_addr, ntohs(a.sin_port))) RET(ARG(2), 6);
@@ -296,6 +361,13 @@ IMPL(wsock32, ord17)                                    /* recvfrom(s, buf, len,
 {
     SOCK(ARG(0), 6); struct sockaddr_in a; socklen_t l = sizeof a; memset(&a, 0, sizeof a);
     ssize_t n = recvfrom(fd, GP(ARG(1)), ARG(2), (int)(ARG(3) & 3), (struct sockaddr *)&a, &l);
+    for (int tries = 0; n >= 0 && fd == game_fd; tries++) {       /* datagrams a joining player didn't ask for: dropped */
+        struct sockaddr_in g = a; if (w32_netvirt()) vguest(&g);
+        if (allowed(g.sin_addr.s_addr)) break;
+        if (getenv("W32_NETLOG")) { char ip[32]; inet_ntop(AF_INET, &g.sin_addr, ip, sizeof ip); fprintf(stderr, "net: dropped %zd bytes from %s (not the host asked)\n", n, ip); }
+        if (tries == 64) { errno = EWOULDBLOCK; n = -1; break; }
+        l = sizeof a; n = recvfrom(fd, GP(ARG(1)), ARG(2), (int)(ARG(3) & 3) | MSG_DONTWAIT, (struct sockaddr *)&a, &l);
+    }
     if (n < 0) RET(fail_errno(c), 6);
     if (getenv("W32_NETLOG")) { char ip[32]; inet_ntop(AF_INET, &a.sin_addr, ip, sizeof ip); fprintf(stderr, "net: recvfrom %x %zd bytes from %s:%u\n", ARG(0), n, ip, ntohs(a.sin_port));
         static int dumps; if (getenv("W32_NETDUMP") && dumps++ < 3) { for (ssize_t k = 0; k < n; k++) fprintf(stderr, "%s%02x", k % 32 ? " " : "\n  ", G_MEM[ARG(1) + (uint32_t)k]); fprintf(stderr, "\n"); } }

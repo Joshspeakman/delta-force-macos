@@ -183,13 +183,16 @@ static void put_str(uint32_t *at, const char *s) { size_t n = strlen(s) + 1; mem
 uint32_t w32_cmdline_a, w32_cmdline_w, w32_modname_a, w32_env_a, w32_env_w;
 void w32_load_static_images(void);
 
+#define GUEST_GUARD (256ull << 20)
 int w32_load(const char *exe_path)
 {
     uint8_t *d; size_t n;
     if (!G_MEM) {
-        void *p = mmap(0, 1ull << 32, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON | MAP_NORESERVE, -1, 0);
+        /* the 4 GB of guest memory, then a 256 MB guard: a runtime copy into guest memory whose length comes from the
+         * game (a network datagram, a file read) faults there instead of running past the end into host memory */
+        void *p = mmap(0, (1ull << 32) + GUEST_GUARD, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON | MAP_NORESERVE, -1, 0);
         if (p == MAP_FAILED) return -1;
-        G_MEM = p; mprotect(G_MEM, 0x10000, PROT_NONE);
+        G_MEM = p; mprotect(G_MEM, 0x10000, PROT_NONE); mprotect(G_MEM + (1ull << 32), GUEST_GUARD, PROT_NONE);
         extern int w32_protect_memory;
         if (w32_protect_memory) mprotect(G_MEM, 1ull << 32, PROT_NONE);   /* free guest memory faults, as on Windows */
     }

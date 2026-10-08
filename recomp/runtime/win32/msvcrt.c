@@ -209,10 +209,13 @@ IMPL(msvcrt, sscanf)
             if (lng) { r = sscanf(in + pos, seg, &d, &used); if (r < 1) break; rt_w64(G_MEM, dst, *(uint64_t *)&d); }
             else { r = sscanf(in + pos, seg, &fl, &used); if (r < 1) break; rt_w32(G_MEM, dst, *(uint32_t *)&fl); }
         } else {                                                          /* c s [ : into a host buffer, then copied */
-            char tmp[4096]; memset(tmp, 0, sizeof tmp); r = sscanf(in + pos, seg, tmp, &used); if (r < 1) break;
+            /* the buffer holds whatever is left of the input: no conversion can store more than that */
+            size_t room = strlen(in + pos) + 2; char *tmp = calloc(1, room);
+            if (!tmp) break;
+            r = sscanf(in + pos, seg, tmp, &used); if (r < 1) { free(tmp); break; }
             size_t len = conv == 'c' ? 1 : strlen(tmp) + 1;
-            if (conv == 'c') { const char *w = pc + 1; int wid = atoi(w); if (wid > 1) len = (size_t)wid; }
-            memcpy(GP(dst), tmp, len);
+            if (conv == 'c') { int wid = atoi(pc + 1); if (wid > 1) len = (size_t)wid; if (len > room) len = room; }
+            memcpy(GP(dst), tmp, len); free(tmp);
         }
         if (used < 0) break;
         pos += used; got++;
