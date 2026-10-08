@@ -58,6 +58,51 @@ and the host follows it (Linux host and Mac host).
 **Audio.** One streaming DirectSound buffer that the game mixes into from a multimedia timer; works as is. DF2's MSACM
 calls (IMA and Microsoft ADPCM) are decoded in df_imports.c.
 
+## Delta Force 1: Full Screen Hardware
+
+DF1 shipped software-only; this port adds a hardware mode built the way DF2's Direct3D driver works
+(`runtime/win32/df_hw.c`). The voxel terrain and its 16-bit depth are still drawn by the CPU, exactly as before;
+everything else 3D (soldiers, buildings, trees, vehicles, effects, the first-person weapon) is drawn by the GPU with
+filtered, mipmapped textures, depth-tested against the terrain's depth.
+
+- **One entry point.** Every model polygon reaches `0x462df0(flags, verts, material)` (cdecl), or its span-buffer twin
+  `0x46cac0` with the same arguments (objects queued in span mode, e.g. in Indonesia and Uzbekistan). Both are
+  overrides (`lift.py DF_OVERRIDES['hw']`): inside the object part of the 3D frame they become GPU triangles, batched
+  while the state stays the same; elsewhere they run as before.
+- **The frame.** Hooks at `0x4856f8` (in `0x485610`, after the terrain and the occlusion test, before the queued lists
+  are flushed) and `0x485739` (after the tracers) bracket the object part. With the first polygon, the view's clip
+  rectangle of colour and depth goes up (`DSR_SURFACE_UPLOAD`, `DSR_DEPTH_UPLOAD`); at the end the GPU picture comes
+  back into the game's own colour rows (`DSR_READBACK`), so the HUD, the 65K conversion and the present are unchanged.
+  The game's 32-bit pixels carry a brightness in their top byte (`(r + 2g + b) / 4`, true of every colour table
+  entry): pixels the GPU left alone keep the CPU's value, drawn ones get that byte. Colour and depth are reached only
+  through the view (`[0x8ee1e0]`: `+0x34..0x40` clip, `+0x50` bpp, `+0x68` / `+0xc68` row pointers), never fixed
+  addresses.
+- **Pixel coverage.** The CPU fills the pixels whose centre `x + 0.5, y + 0.5` lies inside (rows `0x461e30`, spans
+  `0x461cd0`); the pretransformed GPU path samples D3D-style at whole numbers, so vertices move half a pixel. With
+  nearest, affine sampling (`DF_HW_POINT=1`) the GPU picture is then nearly the CPU's pixel for pixel.
+- **Shade.** A vertex's shade is a row 0..63 of its palette's 64 x 256 colour table (`0xbfc100 + pal * 0x614`, `+4`).
+  Row 32 holds the plain colours; rows 0..31 are a per-channel multiply of row 32 (within 2/255), rows 33..63 row 32
+  lerped towards one haze colour (within ~10/255). Fixed function reproduces it: texture = row 32, stage 0
+  `MODULATE(texture, diffuse)` with diffuse = the row's gain, stage 1 `BLENDDIFFUSEALPHA(current, TFACTOR)` with
+  TFACTOR = the haze and diffuse alpha = 1 - the haze fraction. Materials with `+0x10 & 4` start at row 32.
+- **Drawing kinds** (`flags & 0x73c`, the 32-bit table `0x4686d0` fills): 0 a raw colour; 4/8 a palette colour at the
+  shade row; 0x14/0x18 textured, flat/gouraud, + 0x20 texel 0 a hole (alpha test); 0x21x the material's colour over the
+  scene with alpha = texel / 255 (muzzle flashes, shadows); 0x41x/0x43x half row-32 colour, half the scene (smoke).
+  All test depth strictly less; only the opaque and keyed kinds write it. 0x10, 0x30, 0x10x, 0x20x draw nothing in
+  32-bit. Lines (`flags & 0x800`, tracers) and any other kind are left to the CPU after a sync (below).
+- **Water.** The plane passes `0x48d040` (eye above the water) and `0x48d570` (below) blend with the picture and test
+  the depth, objects included. When they will draw (water level `[0xbd5248]`, eye height and first row of the terrain
+  view `[0xc94aa0]`), colour and depth come back first (new `DSR_DEPTH_READBACK`, Metal and GL), the CPU pass runs,
+  and the next polygon uploads the picture again. Uzbekistan's first mission has water (level 15) every frame.
+- **The setting.** Colors gets a fourth value, **Hardware** (`renderer = 3` in df.cfg), selectable with the arrows and
+  persisted like the others (on Exit Game). It runs as 16 Million (`[0x67f4e4] = 1`; every other use of the value
+  compares it with 0 or 2) with the GPU on: hooks on the apply (`0x407ac3`) and open (`0x407985`) copies, the arrow's
+  store (`0x4127df`, cycling 0..3 and skipping unavailable values; Hardware needs 16 Million) and the label
+  (`0x4121b2` / `0x412382`). 256 colours stays software (palettised buffer). `DF_HARDWARE=1` turns the GPU path on in
+  any 32-bit mode.
+- **Cost** (640x480, M1 Pro): one readback a frame ≈ 1.1-1.3 ms, upload ≈ 0.13 ms, GPU 0.4-0.7 ms for ~900-1000
+  polygons in 60-130 draws; water missions sync twice a frame.
+
 ## Verified on Linux (against Proton)
 
 - DF1: Choose Soldier, main menu, settings, campaign map, briefing, first Peru mission (terrain, trees, sky, HUD,
@@ -118,6 +163,10 @@ absolute-time `clock_nanosleep` on macOS: the multimedia timer sleeps until each
 | `W32_SMCLOG=1` | code bytes changed at run time |
 | `W32_DDLOG=1` | DirectDraw/Direct3D calls and each distinct draw state |
 | `DF_MOUSELOG=1` | SetCursorPos and posted mouse messages |
+| `DF_HARDWARE=1`, `DF_HWLOG=1` | DF1 Full Screen Hardware in any 32-bit mode; a line a second (polygons, draws, textures, syncs, readback cost, the object part's time with or without the GPU) and each new polygon kind |
+| `DF_HW_DUAL=<n>` `DF_HW_DUAL_DIR=<dir>` `DF_HW_DUAL_FROM=<seg>` | the CPU draws every polygon too (its picture stays on screen); every n-th frame both pictures of that frame go to `<dir>/<frame>_cpu.ppm` / `_gpu.ppm` |
+| `DF_HW_POINT=1`, `DF_HW_MIPS=0` | nearest, affine texturing as the CPU does (pixel comparisons); no mipmaps |
+| `DF_HW_FLOOD=<level>` | raises the water of a mission that has some (Uzbekistan 1: 110 floods the start) to exercise the plane-pass sync |
 | `W32_TRACE=<file>` | every Windows call |
 | `W32_AUDIOLOG=1`, `W32_AUDIO_DUMP=<wav>` | mixer peaks, the mixed output |
 | `tests/fuzz_insn.py`, `tests/fuzz_sse.py` | instruction forms vs Unicorn (`FUZZ_EXE`, `FUZZ_ANALYSIS`) |

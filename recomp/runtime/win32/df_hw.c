@@ -10,10 +10,10 @@
  *             colour and 16-bit depth in the view's clip rectangle go up (DSR_SURFACE_UPLOAD, DSR_DEPTH_UPLOAD).
  *   0x485739  (after the tracers, before the returns) the segment closes: the GPU picture comes back into the game's
  *             own colour rows (DSR_READBACK), so the HUD, the 65K conversion and the present run unchanged.
- * Inside the segment, a CPU pass that must see the polygons (the clouds/water planes 0x48d040 / 0x48d570, lines,
- * drawing kinds not handled here) first brings colour and depth back (sync), and the next polygon uploads them again.
+ * Inside the segment, a CPU pass that must see the polygons (the water planes 0x48d040 / 0x48d570, lines, drawing
+ * kinds not handled here) first brings colour and depth back (sync), and the next polygon uploads them again.
  *
- * The game's polygon (V: research): three 0x20-byte vertices {x, y 16.16 screen; z: eye depth 16.16 << 6, of which
+ * The game's polygon: three 0x20-byte vertices {x, y 16.16 screen; z: eye depth 16.16 << 6, of which
  * z >> 16 is the 16-bit depth the terrain shares; u, v 16.16 in texture widths; shade 16.16, a row 0..63 of the
  * palette's 64 x 256 colour table (row 32 = the plain colours, 0..31 darker by a gain, 33..63 towards a haze colour)}.
  * The drawing kind is flags & 0x73c (0x4683b0, the 32-bit table filled by 0x4686d0):
@@ -31,14 +31,16 @@
  * +0x50 bits per pixel, +0x68 the colour row pointers, +0xc68 the depth row pointers (so a moved or resized buffer
  * keeps working). 256 colours (8-bit views) are left to the CPU.
  *
- * On: DF_HARDWARE=1, or the Colors setting "Hardware" (renderer = 3 in df.cfg; see df_hw_hook). DF_HWLOG=1: a line
- * per second (polygons, draws, textures, syncs, the readback's cost). */
+ * On: the Colors setting "Hardware" (renderer = 3 in df.cfg; see colors_hook), or DF_HARDWARE=1 in any 32-bit mode.
+ * Development switches: DF_HWLOG=1 a line a second (polygons, draws, textures, syncs and their cost, the object part's
+ * time with the GPU or without) and each new kind of polygon; DF_HW_DUAL=n (with DF_HW_DUAL_DIR, DF_HW_DUAL_FROM) the
+ * CPU draws everything too and every n-th frame both pictures are written out; DF_HW_POINT=1 nearest, affine texturing
+ * as the CPU samples; DF_HW_MIPS=0 no mipmaps; DF_HW_FLOOD=level raises a mission's water (the plane-pass sync). */
 #include "w32.h"
 #include "dsr_producer.h"
 #include "../../../src/dsr/dsr_proto.h"
 #include <string.h>
 #include <time.h>
-#include <math.h>
 
 #if defined(DF_EDITION) && defined(DF1_EDITION)
 
@@ -90,14 +92,22 @@ static struct {
 } S;
 static struct { uint32_t polys, draws, tex_new, tex_up, syncs, zsyncs, planes, skipped, lines, frames; uint64_t rb_us, up_us; } st_;
 
+static void destroy(uint32_t id) { if (!id) return; uint32_t *p = cmd_begin(DSR_SURFACE_DESTROY, 4); p[0] = id; cmd_end(); surface_id_free(id); }
+/* colour and depth surfaces for a clip size; a few sizes are kept, as more than one view can be drawn a frame (the
+ * picture-in-picture view) */
 static void surfaces(uint32_t w, uint32_t h)
 {
-    if (S.rt && S.rw == w && S.rh == h) return;
-    if (S.rt) { uint32_t *p = cmd_begin(DSR_SURFACE_DESTROY, 4); p[0] = S.rt; cmd_end(); surface_id_free(S.rt);
-                p = cmd_begin(DSR_SURFACE_DESTROY, 4); p[0] = S.ds; cmd_end(); surface_id_free(S.ds); }
-    S.rt = next_object_id(); S.ds = next_object_id(); S.rw = w; S.rh = h;
-    uint32_t *p = cmd_begin(DSR_SURFACE_CREATE, 40); memset(p, 0, 40); p[0] = S.rt; p[1] = w; p[2] = h; p[3] = 1; p[4] = 2; p[7] = 1; cmd_end();
-    p = cmd_begin(DSR_SURFACE_CREATE, 40); memset(p, 0, 40); p[0] = S.ds; p[1] = w; p[2] = h; p[3] = 2; p[4] = 3; p[7] = 1; cmd_end();
+    static struct { uint32_t rt, ds, w, h, used; } pool[4];
+    int k, lru = 0;
+    for (k = 0; k < 4; k++) if (pool[k].rt && pool[k].w == w && pool[k].h == h) break;
+    if (k == 4) {
+        for (k = 1; k < 4; k++) if (pool[k].used < pool[lru].used) lru = k;
+        k = lru; destroy(pool[k].rt); destroy(pool[k].ds);
+        pool[k].rt = next_object_id(); pool[k].ds = next_object_id(); pool[k].w = w; pool[k].h = h;
+        uint32_t *p = cmd_begin(DSR_SURFACE_CREATE, 40); memset(p, 0, 40); p[0] = pool[k].rt; p[1] = w; p[2] = h; p[3] = 1; p[4] = 2; p[7] = 1; cmd_end();
+        p = cmd_begin(DSR_SURFACE_CREATE, 40); memset(p, 0, 40); p[0] = pool[k].ds; p[1] = w; p[2] = h; p[3] = 2; p[4] = 3; p[7] = 1; cmd_end();
+    }
+    pool[k].used = S.frame; S.rt = pool[k].rt; S.ds = pool[k].ds; S.rw = w; S.rh = h;
 }
 static uint32_t crow(uint32_t y) { return r32(S.view + 0x68 + 4 * y) + 4 * S.x0; }     /* the colour row, at the clip's left */
 static uint32_t zrow(uint32_t y) { return r32(S.view + 0xc68 + 4 * y) + 2 * S.x0; }
@@ -289,6 +299,19 @@ static void tex_upload(Tex *t)
     }
     free(px); st_.tex_up++;
 }
+static uint32_t tex_slot(const Tex *t) { return ((t->texels * 2654435761u) ^ (t->table * 40503u) ^ (t->lw << 4 | t->lh << 8 | t->mode)) % NTEX; }
+/* textures not used since segment `before` go (a mission's set, once the next one runs), and the table is rebuilt */
+static void tex_evict(uint32_t before)
+{
+    static Tex keep[NTEX]; int n = 0;
+    for (int k = 0; k < NTEX; k++) {
+        Tex *t = &texs[k]; if (!t->texels) continue;
+        if (t->frame >= before) { keep[n++] = *t; continue; }
+        for (uint32_t l = 0; l < t->levels; l++) destroy(t->ids[l]);
+    }
+    memset(texs, 0, sizeof texs); ntex = n;
+    for (int k = 0; k < n; k++) { uint32_t h = tex_slot(&keep[k]); while (texs[h].texels) h = (h + 1) % NTEX; texs[h] = keep[k]; }
+}
 static uint32_t tex_get(uint32_t texels, uint32_t table, uint32_t lw, uint32_t lh, uint32_t mode)
 {
     if (!texels || lw > 10 || lh > 10) return 0;
@@ -304,7 +327,9 @@ static uint32_t tex_get(uint32_t texels, uint32_t table, uint32_t lw, uint32_t l
             return t->gid;
         }
         if (!t->texels) {
+            if (ntex > NTEX * 3 / 4) tex_evict(S.frame);     /* (full: everything not used this frame goes) */
             if (ntex > NTEX * 3 / 4) return 0;
+            if (texs[h].texels) return tex_get(texels, table, lw, lh, mode);   /* the table was rebuilt */
             ntex++; t->texels = texels; t->table = table; t->lw = lw; t->lh = lh; t->mode = mode; t->frame = S.frame;
             t->hash = hash_words(texels, (1u << (lw + lh)) / 4, 1) ^ (table ? hash_words(table, 256, 1) : 0);
             tex_upload(t); return t->gid;
@@ -351,12 +376,8 @@ static int polygon(Ctx *c)
 {
     uint32_t flags = r32(c->esp + 4), verts = r32(c->esp + 8), mat = r32(c->esp + 12), kind = flags & 0x73c;
     int dual = dual_mode() != 0;
-    { static uint8_t seen[0x1000]; uint32_t k = (flags & 0xfff) | 0; if (hw_log && !seen[k]) { seen[k] = 1;    /* each kind of polygon once (development) */
-        fprintf(stderr, "df_hw: first polygon of flags %#x (kind %#x) material %.8s +10 %08x +14 %08x\n", flags, kind, (const char *)(G_MEM + mat), r32(mat + 0x10), r32(mat + 0x14)); }
-      static uint32_t mseen[4096]; static int mlog = -1; if (mlog < 0) mlog = getenv("DF_HWMAT") != 0;
-      if (mlog) { uint32_t h = (mat * 2654435761u) >> 20; while (mseen[h] && mseen[h] != mat) h = (h + 1) & 4095;
-        if (!mseen[h]) { mseen[h] = mat; const int16_t *q = (const int16_t *)(G_MEM + mat + 0x20);
-          fprintf(stderr, "df_hw: material %.8s kind %#x shifts %d %d masks %d %d texels %08x %08x\n", (const char *)(G_MEM + mat), kind, q[0], q[1], q[2], q[3], r32(mat + 0x44), r32(mat + 0x48)); } } }
+    { static uint8_t seen[0x1000]; if (hw_log > 0 && !seen[flags & 0xfff]) { seen[flags & 0xfff] = 1;   /* each kind once */
+        fprintf(stderr, "df_hw: first polygon of flags %#x (kind %#x), material %.8s\n", flags, kind, (const char *)(G_MEM + mat)); } }
     if (flags & 0x800) { st_.lines++; if (!dual) cpu_take(1); return 0; }          /* a line (tracers): the CPU's */
     int drawn = kind == 0 || kind == 4 || kind == 8 || kind == 0x14 || kind == 0x18 || kind == 0x34 || kind == 0x38
              || (kind >= 0x210 && kind <= 0x218 && !(kind & 3)) || ((kind & ~0x2cu) == 0x410 && (kind & 0xc) != 0xc);
@@ -417,17 +438,6 @@ static int polygon(Ctx *c)
         v[k].rhw = point_on() ? 1.0f : (float)(64.0 / (z > 1.0 / 64 ? z : 1.0 / 64));     /* 1 / eye depth: perspective-correct texturing */
         v[k].diffuse = col[k]; v[k].u = (float)(vu[k] / 65536.0); v[k].v = (float)(vv[k] / 65536.0);
     }
-    { static int dbg = -1; if (dbg < 0) dbg = getenv("DF_HWDBG") ? atoi(getenv("DF_HWDBG")) : 0;   /* development: big polygons */
-      float bw = fmaxf(fmaxf(v[0].x, v[1].x), v[2].x) - fminf(fminf(v[0].x, v[1].x), v[2].x), bh = fmaxf(fmaxf(v[0].y, v[1].y), v[2].y) - fminf(fminf(v[0].y, v[1].y), v[2].y);
-      if (dbg > 0 && bw > 100 && bh > 100) { dbg--; fprintf(stderr, "poly %u kind %x %.8s flags %x tex %u | %.1f,%.1f uv %.3f,%.3f z %.4f | %.1f,%.1f uv %.3f,%.3f z %.4f | %.1f,%.1f uv %.3f,%.3f z %.4f\n", S.frame, kind, (const char *)(G_MEM + mat), flags, b.tex,
-          v[0].x, v[0].y, v[0].u, v[0].v, v[0].z, v[1].x, v[1].y, v[1].u, v[1].v, v[1].z, v[2].x, v[2].y, v[2].u, v[2].v, v[2].z); } }
-    { static const char *td; static int init; if (!init) { init = 1; td = getenv("DF_HW_TEXDUMP"); }   /* development: a material's texels, both pointers */
-      if (td && !strncmp(td, (const char *)(G_MEM + mat), strlen(td)) && getenv("DF_HW_DUAL_DIR")) {
-        static int done; if (!done++) { Pal *p = pal_get(pal); uint32_t w = 1u << lw, h = 1u << lh, *px = malloc(w * h * 4); char path[1024];
-          for (int which = 0; which < 2 && p; which++) { uint32_t t = r32(mat + 0x44 + 4 * which);
-            for (uint32_t k = 0; k < w * h; k++) px[k] = r32(p->table + 32 * 1024 + 4 * G_MEM[t + k]);
-            snprintf(path, sizeof path, "%s/tex_%s_%d.ppm", getenv("DF_HW_DUAL_DIR"), td, which); ppm(path, px, w, w, h); }
-          free(px); } } }
     emit(&b, v);
     return !dual;
 }
@@ -442,8 +452,21 @@ static void seg_open(void)
     if (x0 < 0 || y0 < 0 || x1 < x0 || y1 < y0 || x1 - x0 >= 4096 || y1 - y0 >= 4096) return;
     S.view = v; S.x0 = (uint32_t)x0; S.y0 = (uint32_t)y0; S.w = (uint32_t)(x1 - x0 + 1); S.h = (uint32_t)(y1 - y0 + 1);
     S.open = 1; S.gpu = 0; S.frame++; st_.frames++;
+    if (!(S.frame & 511) && S.frame > 3600) tex_evict(S.frame - 3600);   /* textures unused for a minute or so */
     { static int flood = -1; if (flood < 0) flood = getenv("DF_HW_FLOOD") ? atoi(getenv("DF_HW_FLOOD")) : 0;   /* development: raise the water */
       if (flood > 0 && r32(0x00bd5248u)) w32(0x00bd5248u, (uint32_t)flood << 14); }
+}
+/* DF_HWLOG: the time the object part of the frame takes, with the GPU or without (to compare) */
+static uint64_t obj_t0, obj_us, obj_n, obj_last;
+static void obj_time(void)
+{
+    if (hw_log < 0) hw_log = getenv("DF_HWLOG") != 0;
+    if (!hw_log || !obj_t0) return;
+    uint64_t t = now_us(); obj_us += t - obj_t0; obj_n++;
+    if (t - obj_last >= 1000000) {
+        fprintf(stderr, "df_hw: objects %.2f ms a frame (%s)\n", obj_n ? obj_us / 1000.0 / obj_n : 0, hw_wanted() ? "GPU" : "CPU");
+        obj_us = obj_n = 0; obj_last = t;
+    }
 }
 static void seg_close(void)
 {
@@ -503,8 +526,8 @@ int df_hw_hook(Ctx *c, uint32_t addr)
 {
     if (colors_hook(c, addr)) return 1;
     switch (addr) {
-    case 0x004856f8u: seg_open(); return 1;           /* the objects begin (call 0x46be50, the list flush) */
-    case 0x00485739u: seg_close(); return 1;          /* the 3D frame ends */
+    case 0x004856f8u: obj_t0 = now_us(); seg_open(); return 1;   /* the objects begin (call 0x46be50, the list flush) */
+    case 0x00485739u: seg_close(); obj_time(); return 1;         /* the 3D frame ends */
     case 0x0048d040u: case 0x0048d570u:               /* the water plane, below / above the eye: it blends with the picture */
         if (S.open && plane_draws(addr)) { st_.planes++; if (!dual_mode()) cpu_take(1); }   /* and tests the depth */
         return 1;

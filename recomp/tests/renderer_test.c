@@ -108,6 +108,14 @@ int main(int argc,char **argv) {
  assert(done==12 && px==0xff000000); /* clipped out by depth */
  outside[1]=0xffffffffu; outside[5]=13; cmd(DSR_READBACK,outside,sizeof outside);
  assert(done==(13u|0x80000000u)); /* failed reads must not report success */
+ /* Delta Force 1's water reads the depth its hardware polygons wrote: outside the box 0, inside the quad's 0.5 */
+ float zv[2]={-1,-1}; dsr_gl_readback(r,zv,sizeof zv,&done);
+ uint32_t zread[]={5,11,16,2,1,14}; cmd(DSR_DEPTH_READBACK,zread,sizeof zread);
+ printf("depth readback: %g %g (expected 0 0.5)\n",zv[0],zv[1]);
+ assert(done==14 && fabsf(zv[0])<1e-3f && fabsf(zv[1]-0.5f)<1e-3f);
+ zread[0]=1; zread[5]=15; cmd(DSR_DEPTH_READBACK,zread,sizeof zread);
+ assert(done==(15u|0x80000000u)); /* a color surface has no depth to read */
+ cmd(DSR_SET_RT,with_depth,sizeof with_depth);
  cmd(DSR_DRAW,NULL,0); cmd(DSR_TRANSFORM,NULL,0); /* truncated commands */
  /* DS2 uses stencil for its D3D9 rendering passes. A clear must ignore prior write masks. */
  cmd(DSR_SET_RT,with_depth,sizeof with_depth); rs(7,0); rs(52,1); rs(56,3); rs(57,7); rs(58,255); rs(59,0);
