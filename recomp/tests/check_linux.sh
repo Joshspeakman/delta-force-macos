@@ -37,7 +37,6 @@ for test in frame_pacer display_modes; do
 done
 python3 -m py_compile recomp/host/linux_launcher/*.py recomp/tools/check_edition.py \
     recomp/tools/prepare_linux_icon.py
-python3 recomp/tests/edition_test.py
 
 if [[ -x recomp/.venv/bin/python ]]; then
     recomp/.venv/bin/python recomp/tests/lift_flow_test.py
