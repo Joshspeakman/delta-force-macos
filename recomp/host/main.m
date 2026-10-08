@@ -37,9 +37,31 @@ static DsrShmHeader *H; static uint8_t *ring;
 static CAMetalLayer *layer; static NSWindow *win; static uint32_t game_hwnd;
 static volatile int game_running = 1;
 static const char *script_tick(uint32_t fno);
+static uint32_t key_scan(int vk);     // a scripted key's scan code (lParam bits 16..24), as a real key event carries
 static int test_mode;                  // DS_TEST=1: ordinary background window, never captures the mouse or takes focus
 
 // ---------------------------------------------------------------- rendering
+/* test mode: frames the display actually showed (a drawable's presentedTime; 0 when it was never shown) */
+static pthread_mutex_t shown_lock = PTHREAD_MUTEX_INITIALIZER; static int shown_n; static double shown_last, shown_gap;
+static void shown(double t)
+{
+    if (t <= 0) return;
+    pthread_mutex_lock(&shown_lock);
+    if (shown_last && t - shown_last > shown_gap) shown_gap = t - shown_last;
+    shown_last = t; shown_n++;
+    pthread_mutex_unlock(&shown_lock);
+}
+/* The refresh rate of the display the window is on, for the frame cap's "display" setting (ddraw.c; Delta Force's
+ * default): the screen's highest rate (ProMotion: 120), the mode's exact one when it says (59.94 and the like). */
+extern double dsr_display_hz;
+static void note_display(NSScreen *s)
+{
+    if (!s) s = NSScreen.mainScreen;
+    double hz = (double)s.maximumFramesPerSecond;
+    CGDisplayModeRef m = CGDisplayCopyDisplayMode([s.deviceDescription[@"NSScreenNumber"] unsignedIntValue]);
+    if (m) { double r = CGDisplayModeGetRefreshRate(m); if (r > 0 && fabs(r - hz) < 1) hz = r; CGDisplayModeRelease(m); }
+    if (hz > 0 && hz != dsr_display_hz) { dsr_display_hz = hz; fprintf(stderr, "DungeonSiegeNative: display %.2f Hz\n", hz); }
+}
 void w32_crash_init(const char *data_dir, const char *build); void w32_crash_thread(const char *name);
 void w32_crash_heartbeat(int which); const char *w32_crash_last_path(void);
 const char *w32_crash_report(const char *kind, const char *reason, Ctx *c, uint32_t guest_pc);
@@ -78,9 +100,11 @@ static void *render_thread(void *arg)
                             extern long dsr_stat[8]; extern double dsr_gpu_ms[100000]; extern int dsr_frame;
                             double gsum = 0, gmax = 0; int gn = 0;   // frames whose command buffers have completed (two behind)
                             for (int k = (int)f0 - 2; k < dsr_frame - 2; k++) if (k >= 0 && k < 100000) { gsum += dsr_gpu_ms[k]; if (dsr_gpu_ms[k] > gmax) gmax = dsr_gpu_ms[k]; gn++; }
-                            fprintf(stderr, "DungeonSiegeNative: frame %u (%ux%u) %.1f fps; draws %ld, dropped %ld/%ld/%ld/%ld; gpu %.2f ms (max %.2f); longest frame %.1f ms, %d over 25 ms\n",
+                            pthread_mutex_lock(&shown_lock); int sn = shown_n; double sg = shown_gap; shown_n = 0; shown_gap = 0; pthread_mutex_unlock(&shown_lock);
+                            fprintf(stderr, "DungeonSiegeNative: frame %u (%ux%u) %.1f fps; draws %ld, dropped %ld/%ld/%ld/%ld; gpu %.2f ms (max %.2f); longest frame %.1f ms, %d over 25 ms; "
+                                    "on screen %.1f fps, longest %.1f ms\n",
                                     fno, w, h, (fno - f0) / (now - t0), dsr_stat[0], dsr_stat[1], dsr_stat[2], dsr_stat[3], dsr_stat[4],
-                                    gn ? gsum / gn : 0, gmax, worst * 1000, spikes);
+                                    gn ? gsum / gn : 0, gmax, worst * 1000, spikes, sn / (now - t0), sg * 1000);
                             t0 = now; f0 = fno; worst = 0; spikes = 0; }
                     }
                     {   // DS_SHOT=<path>,<frame>: save that frame as a PNG (development)
@@ -112,6 +136,7 @@ static void *render_thread(void *arg)
                     id<CAMetalDrawable> d = [layer nextDrawable];
                     id<MTLCommandBuffer> cb = d ? dsr_renderer_present_to(r, d.texture) : nil;
                     if (cb) {
+                        if (test_mode) [d addPresentedHandler:^(id<MTLDrawable> dr) { shown(dr.presentedTime); }];
                         [cb presentDrawable:d]; w32_crash_heartbeat(3);
                         [cb addCompletedHandler:^(id<MTLCommandBuffer> c) { (void)c; __atomic_store_n(&H->frames_done, fno, __ATOMIC_RELEASE); }];
                         dsr_renderer_flush(r, 0);
@@ -208,12 +233,18 @@ static const char *script_tick(uint32_t fno)       /* returns a screenshot path 
             if (fno == a->frame + 20) post(0x201, 1, pos_lp());
         } else if (!strcmp(a->kind, "move") && fno == a->frame) { mot_home = 8; mot_dx = a->x; mot_dy = a->y; }
         else if (!strcmp(a->kind, "rel") && fno >= a->frame && fno < a->frame + 60) rel_motion(a->x / 60.0, a->y / 60.0);   /* x,y over 60 frames, like a trackpad swipe */
+        else if (!strcmp(a->kind, "glide") && fno == a->frame) {   /* glide:x,y: the same motion over half a second, 1000 times a second
+                                                                       like a real mouse, whatever the frame rate */
+            int gx = a->x, gy = a->y;
+            dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INTERACTIVE, 0), ^{
+                for (int k = 0; k < 500; k++) { rel_motion(gx / 500.0, gy / 500.0); usleep(1000); } });
+        }
         else if (!strcmp(a->kind, "key")) {
-            if (fno == a->frame) { w32_keys[a->x & 0xff] = 0x80; post(0x100, (uint32_t)a->x, 1); }
-            if (fno == a->frame + 3) { w32_keys[a->x & 0xff] = 0; post(0x101, (uint32_t)a->x, 0xc0000001u); }
+            if (fno == a->frame) { w32_keys[a->x & 0xff] = 0x80; post(0x100, (uint32_t)a->x, 1 | key_scan(a->x)); }
+            if (fno == a->frame + 3) { w32_keys[a->x & 0xff] = 0; post(0x101, (uint32_t)a->x, 0xc0000001u | key_scan(a->x)); }
         } else if (!strcmp(a->kind, "hold")) {            /* hold:vk,frames: a key held down (the modifier of a chord) */
-            if (fno == a->frame) { w32_keys[a->x & 0xff] = 0x80; post(0x100, (uint32_t)a->x, 1); }
-            if (fno == a->frame + (uint32_t)a->y) { w32_keys[a->x & 0xff] = 0; post(0x101, (uint32_t)a->x, 0xc0000001u); }
+            if (fno == a->frame) { w32_keys[a->x & 0xff] = 0x80; post(0x100, (uint32_t)a->x, 1 | key_scan(a->x)); }
+            if (fno == a->frame + (uint32_t)a->y) { w32_keys[a->x & 0xff] = 0; post(0x101, (uint32_t)a->x, 0xc0000001u | key_scan(a->x)); }
         } else if (!strcmp(a->kind, "shot") && fno == a->frame) shot = a->path;
         else if (!strcmp(a->kind, "peek") && fno == a->frame) {
             extern uint8_t *G_MEM; char *e = a->path; uint32_t at = (uint32_t)strtoul(e, &e, 16), v = 0;
@@ -250,6 +281,11 @@ static void init_keymap(void)
         {0x56,0x64,0x4b,0},{0x57,0x65,0x4c,0},{0x58,0x66,0x4d,0},{0x59,0x67,0x47,0},{0x5b,0x68,0x48,0},{0x5c,0x69,0x49,0},{0x41,0x6e,0x53,0},
         {0x43,0x6a,0x37,0},{0x45,0x6b,0x4e,0},{0x4e,0x6d,0x4a,0},{0x4b,0x6f,0x35,1},{0x4c,0x0d,0x1c,1}};
     for (size_t k = 0; k < sizeof t / sizeof *t; k++) { keymap[t[k][0]].vk = t[k][1]; keymap[t[k][0]].scan = t[k][2]; keymap[t[k][0]].ext = t[k][3]; }
+}
+static uint32_t key_scan(int vk)
+{
+    for (int k = 0; k < 128; k++) if (keymap[k].vk == vk) return (uint32_t)keymap[k].scan << 16 | (uint32_t)keymap[k].ext << 24;
+    return 0;
 }
 static uint32_t buttons;               // MK_ flags
 static void post(uint32_t msg, uint32_t wp, uint32_t lp) { if (game_hwnd) w32_post(w32_window_tid(game_hwnd), game_hwnd, msg, wp, lp); }
@@ -376,6 +412,10 @@ static void window_created(uint32_t hwnd, int x, int y, int w, int h, uint32_t s
         win.contentView = v; [win makeFirstResponder:v];
         win.collectionBehavior = NSWindowCollectionBehaviorFullScreenPrimary;
         [win setLevel:NSNormalWindowLevel];
+        NSWindow *w0 = win;   // the frame cap follows the display the window is on, and a changed refresh rate
+        [[NSNotificationCenter defaultCenter] addObserverForName:NSWindowDidChangeScreenNotification object:w0 queue:nil usingBlock:^(NSNotification *n) { (void)n; note_display(w0.screen); }];
+        [[NSNotificationCenter defaultCenter] addObserverForName:NSApplicationDidChangeScreenParametersNotification object:nil queue:nil usingBlock:^(NSNotification *n) { (void)n; note_display(w0.screen); }];
+        note_display(w0.screen);
     });
 }
 static void window_changed(uint32_t hwnd, int x, int y, int w, int h, int visible)
@@ -601,6 +641,7 @@ int main(int argc, char **argv)
         layer.framebufferOnly = YES; layer.opaque = YES; layer.contentsGravity = kCAGravityResizeAspect; layer.maximumDrawableCount = 3;
         layer.displaySyncEnabled = getenv("DSR_VSYNC") ? atoi(getenv("DSR_VSYNC")) != 0 : YES;
         layer.backgroundColor = CGColorGetConstantColor(kCGColorBlack);
+        note_display(nil);
 
         void *m = mmap(0, DSR_SHM_SIZE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
         H = m; ring = (uint8_t *)m + DSR_HEADER_SIZE; H->magic = DSR_SHM_MAGIC; H->version = 1;

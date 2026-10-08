@@ -69,7 +69,22 @@ DF_HOOKS = {
             0x0043a31f: 'join: the joined game\'s type (NovaWorld: Internet)',
         },
     },
-    'frame': {'df1': {}, 'df2': {}},
+    'frame': {
+        'df1': {
+            0x00404357: 'Game Loop update, a tick runs: positions before it kept (in-between frames)',
+            0x00479654: 'mouse-look scaler, after the sampler: the tick\'s delta from the host\'s raw motion',
+            0x0046130f: 'main loop, waiting for the next tick: a render in between (Sleep(0) path)',
+            0x0046131e: 'main loop, before the game\'s own render: the time since the last tick',
+            0x00404b71: 'Game Loop render returns: the tick\'s own positions back',
+        },
+        'df2': {
+            0x00464cef: 'Game Loop update, a tick runs: positions before it kept (in-between frames)',
+            0x0041eb85: 'mouse-look scaler, after the sampler: the tick\'s delta from the host\'s raw motion',
+            0x00468b06: 'main loop, waiting for the next tick: a render in between (Sleep(0) path)',
+            0x00468b2c: 'main loop, before the game\'s own render: the time since the last tick',
+            0x00465ecb: 'Game Loop render returns: the tick\'s own positions back',
+        },
+    },
     'res': {'df1': {}, 'df2': {}},
     'hw': {
         'df1': {
@@ -87,7 +102,12 @@ DF_HOOKS = {
     },
 }
 DF_OVERRIDES = {
-    'frame': {'df1': {}, 'df2': {}},
+    'frame': {
+        'df1': {0x00404b00: 'Game Loop render: positions between the last two ticks, mouse look-ahead, muzzle flash; '
+                            'not drawn when its frame is due after the next tick'},
+        'df2': {0x00465e40: 'Game Loop render: positions between the last two ticks, mouse look-ahead, muzzle flash; '
+                            'not drawn when its frame is due after the next tick'},
+    },
     'res': {'df1': {}, 'df2': {}},
     'hw': {
         'df1': {
