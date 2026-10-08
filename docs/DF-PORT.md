@@ -70,8 +70,10 @@ immediate: the tick takes the host's raw motion (the games' own WM_MOUSEMOVE/Set
 arrives between reading and re-centring, often once frames outnumber ticks) and each render turns the player by the
 motion the next tick has not taken yet, through the game's own sensitivity and zoom scale. Renders start just before
 their frame is due, so the mouse is read late and every frame alike; below 62.5 Hz the game's own render is left out
-when its frame belongs after the next tick. The muzzle flash bits a tick sets are set again for each render of that
-tick. Menus and the multiplayer score screen are as before.
+when its frame belongs after the next tick; when renders keep missing their refresh for want of time, a frame every
+second refresh (evenly). The muzzle flash bits a tick sets are set again for each render of that tick. The wait for
+the next tick is a sleep rather than the game's Sleep(0) spin. Menus and the multiplayer score screen draw as before.
+The cap's clock and the display's are independent: their phase can slip slowly (rarely a frame shown twice).
 
 ## Delta Force 1: Full Screen Hardware
 
@@ -154,6 +156,21 @@ scripts reach the same screens as on Linux:
 - Sound: the mixed output (`W32_AUDIO_DUMP`) has the menu music and the mission sounds.
 - `tests/fuzz_sse.py`: every MMX form of both games matches Unicorn on arm64.
 - `~/Applications/Delta Force.app` and `Delta Force 2.app` launch full screen and quit from the menu.
+- High frame rates, on a 120 Hz built-in display (test host; frames on screen counted from the drawables'
+  `presentedTime`; other test runs shared the machine at times):
+  - DF1 Software, 2 minutes of mission (walking, turning, firing): 120 frames a second on screen, ticks 62–63 in every
+    second, 6 frames late in 98 s. DF2 Software: 120, 0 late in most seconds; its render (6–9 ms by view) is close to a
+    120 Hz frame, so heavy views drop to a frame every second refresh until they lighten. DF2 Hardware (Direct3D, about
+    12 ms a render here): a steady 60. Windowed (both): frames in between as in full screen, no mouse-look (as before).
+  - `DSR_FPSCAP=60` (60 Hz pacing on the same panel): 60 on screen, the game's render left out where two ticks share a
+    frame; walking moves the same distance every frame (0.0260 ± 0.0001 units).
+  - A 300-pixel mouse swipe turns the player by exactly 300 pixels' worth (`peek` of the yaw before and after); with
+    motion arriving 1000 times a second (`glide`), the camera turns 4–5 pixels' worth every frame at 120 (8–10 at 60);
+    walking moves 0.0130 ± 0.0001 units every frame at 120.
+  - A jump of the player (`DF_FRAME_JUMP`) is drawn at once, without frames in between; every position a render drew
+    is the tick's own again after it (`DF_FRAME_LOG=2` check); `DF_HIGH_FPS=0` gives the old 60 and one frame per tick.
+  - Not checked: a real 60 Hz or external display, multiplayer, a death/respawn (the death camera's spin still moves
+    once per tick).
 
 The game writes its settings (`df.cfg` / `df2.cfg`, and the soldier files) when it exits through its own Exit Game.
 A run that is killed (a test's timeout) keeps the settings it started with.
