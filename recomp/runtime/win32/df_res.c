@@ -9,8 +9,9 @@
  * Wider than 4:3 sees more to the sides (Hor+): the 3D view keeps the vertical field of view of the 4:3 screen of
  * the same height, its horizontal angle grows (90 degrees at 4:3, 106 at 16:9; the scope's 22 degrees likewise).
  * Narrower than 4:3 (5:4) keeps the horizontal angle and sees more above and below. Limits: 768 lines (row tables
- * inside the renderers' structures, at fixed offsets in hundreds of instructions) and 2560 columns (the per-column
- * arrays the lifter moved to bigger blocks: DF_MOVED; DF2 keeps one per column pair with room for 2560). Widths are
+ * inside the renderers' structures, at fixed offsets in hundreds of instructions) and 2048 columns (the per-column
+ * arrays the lifter moved to bigger blocks have room for 2560: DF_MOVED; DF1 faults in its polygon edge lists
+ * (0x46cc30) from 2304 columns on, DF2 ran at 2560); a screen wider than 8:3 gets fewer lines (2048x576 at 32:9). Widths are
  * multiples of 16 (DF1: its present copies 16-byte blocks of 8-bit pixels, the terrain draws column pairs) or 8 (DF2:
  * the hardware driver's copy of the CPU-drawn terrain goes 8 pixels at a time).
  *
@@ -24,6 +25,9 @@
  *             that of a 4:3 screen of the same height. The frustum planes follow from the same angle.
  *   0x428810, 0x402d50  HUD pictures (weap%i/pos%i.pcx) and the small font (f_sml%i.pcx) exist only for the 4:3 widths:
  *             the custom size uses the set of the 4:3 screen of its height (1024 at 768 lines, whose bars are H/8)
+ *   0x465f30, 0x465f8e  the scope: a circle of radius W*5/32 at (3W/4, H/2) showing a fixed angle (28 degrees over
+ *             the magnification), so its magnification grew with the width; the radius comes from the width of the 4:3
+ *             screen of the same height (whose focal length the main view keeps), the centre from the real width
  *   0x473c9c  the end of "reset the 2D clip" (0x473c70, fixed 1023x767): HUD lines and boxes reach the right edge
  *   The z buffer (2 bytes per pixel below the top bar) and the terrain's per-column arrays are moved: DF_MOVED.
  *   The 640x480 windowed mode is unchanged (the game turns 800x600 and 1024x768 into 640x480 when windowed).
@@ -41,6 +45,15 @@
  *             move to that set's place on the screen: centred, the bottom bar's items to the bottom
  *   0x44878e, 0x44864d  the top and bottom bars are one linear copy each (bitmap width == screen width): drawn here
  *             row by row, centred, the sides filled with a strip of the bars' frame repeated
+ *   0x4261f9  the map (HUD and commander's): world units per pixel and the size of its marks follow the screen width
+ *             (zoom * 1024 / W): the bitmap set's width keeps the 4:3 scale
+ *   0x4555a0, 0x455602  the rifle scope: a circle of radius W*5/32 at (3W/4, H/2) showing a fixed angle, so its
+ *             magnification grew with the width; the radius comes from the width of the 4:3 screen of the same height (whose
+ *             focal length the main view keeps), the centre from the screen's
+ *   0x458066  the end of "reset the 2D clip" (0x458040, fixed 1023x767, as in DF1): text and HUD items reach the right
+ *             edge (the waypoint panel and the map's marks sit past column 1024 from 1792 columns on)
+ *   0x47a7b2  Windowed: each frame is stretched into a 640x480 window (StretchDIBits); the custom size is shown as it
+ *             is (the picture becomes the frame on screen: df_imports.c), not squeezed to 4:3. The menus stay 640x480.
  *   0x4487a1, 0x448e68  the message lines in the top bar and the recent-messages list are spaced by the screen width
  *             (W*3/160): by the bitmap set's width instead, as the font is the set's. */
 #include "w32.h"
@@ -50,7 +63,7 @@
 extern int w32_screen_w, w32_screen_h;
 #define RD(a)    rt_r32(G_MEM, (uint32_t)(a))
 #define WR(a, v) rt_w32(G_MEM, (uint32_t)(a), (uint32_t)(v))
-#define RES_MAX_W 2560                           /* the moved per-column arrays (tools/lift.py DF_MOVED) */
+#define RES_MAX_W 2048                           /* DF1's polygon edge lists; the moved arrays hold 2560 */
 #define RES_MAX_H 768                            /* the renderers' row tables */
 #ifdef DF1_EDITION
 #define RES_ALIGN 16
@@ -119,6 +132,12 @@ int df_res_hook(Ctx *c, uint32_t addr)
         return 1;
     case 0x402d50:                                       /* the small font: 320/400/640/800 */
         if (custom_mode()) { int a = art_width(res_w, res_h); WR(c->esp + 4, a == 512 ? 400 : a > 800 ? 800 : a); }
+        return 1;
+    case 0x465f30:                                       /* scope circle (w, h): its radius from the 4:3 width */
+        if (custom_mode()) WR(c->esp + 4, res_h * 4 / 3);
+        return 1;
+    case 0x465f8e:                                       /* ... its centre (esi) at 3/4 of the real width */
+        if (custom_mode()) c->esi = (uint32_t)(res_w * 3 / 4);
         return 1;
     case 0x473c9c:                                       /* 2D clip reset to 1023x767: to the screen's edges */
         if (custom_mode()) {
@@ -199,6 +218,21 @@ int df_res_hook(Ctx *c, uint32_t addr)
         return 1;
     case 0x4665e5: case 0x4672c5:
         if (custom_mode()) hud_layout();
+        return 1;
+    case 0x4261f9:                                       /* map: its scale (and its marks' size) from the width */
+        if (custom_mode()) c->eax = (uint32_t)art_width(res_w, res_h);
+        return 1;
+    case 0x4555a0:                                       /* scope circle (w, h): its radius from the width */
+        if (custom_mode()) WR(c->esp + 4, res_h * 4 / 3);
+        return 1;
+    case 0x455602:                                       /* ... its centre stays at 3/4 of the real width */
+        if (custom_mode()) c->edx = (uint32_t)(res_w * 3 / 4);
+        return 1;
+    case 0x458066:                                       /* 2D clip reset to 1023x767 (eax = the canvas) */
+        if (custom_mode() && (int)RD(c->eax + 0x2008) > 1024) WR(c->eax + 0x201c, (int)RD(c->eax + 0x2008) - 1);
+        return 1;
+    case 0x47a7b2:                                       /* Windowed: StretchDIBits into a 640x480 window */
+        if (custom_mode()) { WR(c->esp + 12, res_w); WR(c->esp + 16, res_h); }
         return 1;
     case 0x4487a1: if (custom_mode()) c->eax = (uint32_t)art_width(res_w, res_h); return 1;   /* message lines: */
     case 0x448e68: if (custom_mode()) c->ecx = (uint32_t)art_width(res_w, res_h); return 1;   /* spaced by width */

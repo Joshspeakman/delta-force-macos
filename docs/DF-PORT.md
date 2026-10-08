@@ -103,6 +103,42 @@ filtered, mipmapped textures, depth-tested against the terrain's depth.
 - **Cost** (640x480, M1 Pro): one readback a frame ≈ 1.1-1.3 ms, upload ≈ 0.13 ms, GPU 0.4-0.7 ms for ~900-1000
   polygons in 60-130 draws; water missions sync twice a frame.
 
+## Screen shapes (widescreen)
+
+`runtime/win32/df_res.c`. The games' "1024x768" choice renders at the screen's shape: 768 lines and
+as many columns as the aspect gives (1184x768 on a 16:10 MacBook screen, 1360x768 at 16:9, 1792x768 at 21:9; widths
+rounded to 16 in DF1, 8 in DF2; at most 2048 columns, so 32:9 gets 2048x576), scaled to the screen by the host like any
+mode. `DF_RES=WxH` sets the size (a taller one is scaled down to 768 lines, keeping its shape), `DF_RES=off` keeps
+1024x768; a 4:3 screen gives 1024x768 as before. The other choices and the menus (640x480) are unchanged. DF1's
+`max_res` (df.cfg, 4 = 800x600 as shipped) is raised to 5 so the choice is offered.
+- Hor+: the projection keeps the focal length of the 4:3 screen of the same height and widens the horizontal angle
+  (90 degrees at 4:3, 106 at 16:9, 121 at 1792x768; the zoom's 22 likewise); narrower than 4:3 keeps the 90 and sees
+  more above and below. DF1 changes the half angle in the projection set-up (0x44a8fc, ST(0)); DF2 the request of the
+  main view (0x4661da). DF2's Direct3D draws vertices the game projected, so all three drivers follow.
+- HUD: both games have bitmaps (and DF2 a HUD.DEF layout) only for the 4:3 widths; the custom size uses the set of the
+  4:3 screen of its height (1024 at 768 lines). DF1 places them in virtual 1024x768 coordinates (they spread, as the
+  game does at every size) and its 2D clip is widened (it was fixed at 1023x767). DF2's bars, a linear copy each, are
+  drawn centred with a strip of their frame repeated at the sides, and the layout is moved with them; the message lines
+  are spaced by the set's width.
+- Limits removed by moving arrays (`tools/lift.py` `DF_MOVED`, the 'res' entries): the lifter rewrites the address
+  field of each listed instruction (before decoding, so every use follows) to a block above the image that the runtime
+  commits at load time (`loader.c`, `rt_blocks` in fntab.c), one reservation with an uncommitted page after each block
+  (an overrun faults). The build stops if any other instruction or fixup still names an address inside a moved array.
+  DF1: the terrain's per-column-pair records (0xcb8d84, 512 pairs) and per-column offsets (0xc975a8, 1024), and the
+  static z buffer (0x503740: 2·W·(H−H/8) bytes, past it from 1152x768); DF2: the terrain's per-column tables 0x51d60c
+  and 0x532610 (1028 columns), kept 0x15004 apart (0x4728dd reads one through a pointer into the other).
+- DF2 Hardware sets only a display mode DirectDraw lists: the custom size is listed after the three 4:3 ones
+  (`ddraw_pal.c`; unlisted, the game waits forever at mission start). Its z buffer is allocated by the size choice
+  (0x46678e: 4·W·H) and its copy of the CPU-drawn terrain uses 0xa6df74/78 (0x4260d4). Windowed shows the frame at the
+  custom size (it stretched every size into a 640x480 window: 0x47a7b2).
+- Not done (more than 768 lines, e.g. a native 1117 or 2160): both games keep 768-entry row tables inside structures
+  whose later fields are addressed at fixed offsets in hundreds of instructions (DF1: the screen context 0x67dbf8, the
+  renderer state 0x8cfa20; DF2: the view 0xc2f740, the canvas 0x67d420 has 1024), plus per-row arrays cleared with a
+  hard-coded 0x300 (DF1 0x48994f/0x48996e and 0xc93ea4, 0xc94aa4; DF2 0x4726fa/0x472701 and 0x533620, 0x51a908 for 960
+  rows). Moving the structures (or every displacement) and an audit of the polygon/sprite rasterizers would be needed,
+  and the CPU renderers draw 2-10 times the pixels. DF1 also faults in its polygon edge lists (0x46cc30) from 2304
+  columns on (cause not found; the moved arrays have room for 2560).
+
 ## Verified on Linux (against Proton)
 
 - DF1: Choose Soldier, main menu, settings, campaign map, briefing, first Peru mission (terrain, trees, sky, HUD,
