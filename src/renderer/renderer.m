@@ -672,6 +672,18 @@ static void readback(DSRRenderer *r, const uint32_t *p)
     }
     if (r->rb_done) __atomic_store_n(r->rb_done, ok ? p[5] : p[5] | 0x80000000u, __ATOMIC_RELEASE);   /* high bit: not done */
 }
+/* DSR_DEPTH_READBACK: the depth part of a depth/stencil surface as floats, into the readback area */
+static void depth_readback(DSRRenderer *r, const uint32_t *p)
+{
+    Surf *s = surf(r, p[0]); uint32_t x = p[1], y = p[2], w = p[3], h = p[4]; int ok = 0;
+    if (s && r->rb_buf && s->fmt == 3 && w && h && (uint64_t)x + w <= s->w && (uint64_t)y + h <= s->h && (uint64_t)w * h * 4 <= r->rb_buf.length) {
+        if (r->enc) { [r->enc endEncoding]; r->enc = nil; }
+        [blit_enc(r) copyFromTexture:s->tex sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(x, y, 0) sourceSize:MTLSizeMake(w, h, 1)
+                             toBuffer:r->rb_buf destinationOffset:0 destinationBytesPerRow:w * 4 destinationBytesPerImage:w * h * 4 options:MTLBlitOptionDepthFromDepthStencil];
+        dsr_renderer_flush(r, 1); ok = 1;
+    }
+    if (r->rb_done) __atomic_store_n(r->rb_done, ok ? p[5] : p[5] | 0x80000000u, __ATOMIC_RELEASE);
+}
 double dsr_renderer_present_time(DSRRenderer *r) { return r->present_ts; }
 void dsr_renderer_set_graph(DSRRenderer *r, const float *a, int ha, const float *b, int hb) { r->g_a = a; r->g_ha = ha; r->g_b = b; r->g_hb = hb; r->g_on = 1; }
 void dsr_renderer_presented_size(DSRRenderer *r, uint32_t *w, uint32_t *h) { Surf *s = surf(r, r->presented); *w = s ? s->w : 0; *h = s ? s->h : 0; }
@@ -701,6 +713,7 @@ int dsr_renderer_exec(DSRRenderer *r, uint32_t op, const uint8_t *pl, uint32_t s
     case DSR_UPLOAD_OVER: upload_over(r, p, size); break;
     case DSR_DEPTH_UPLOAD: if (size >= 12) depth_upload(r, p, size); break;
     case DSR_READBACK: readback(r, p); break;
+    case DSR_DEPTH_READBACK: if (size >= 24) depth_readback(r, p); break;
     case DSR_BLT: { int32_t dr[4], sr[4]; memcpy(dr, p + 1, 16); memcpy(sr, p + 6, 16);
                     if (p[5]) quad(r, p[0], dr, p[5], sr, 0, 0); else if (!(p[10] & 0x20000)) quad(r, p[0], dr, 0, dr, 1, p[11]); } break;
     case DSR_PRESENT: r->presented = p[0]; dsr_frame++;   // caller presents/commits

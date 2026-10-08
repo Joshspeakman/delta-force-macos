@@ -371,6 +371,19 @@ static void readback(DSRRenderer *r,const uint32_t *p) {
  }
  if(r->readback_done) __atomic_store_n(r->readback_done,p[5]|(ok?0:0x80000000u),__ATOMIC_RELEASE);
 }
+/* DSR_DEPTH_READBACK: the depth of a depth/stencil surface as floats (a framebuffer with only that attachment) */
+static void depth_readback(DSRRenderer *r,const uint32_t *p) {
+ Surf *s=surf(r,p[0]); int ok=0;
+ if(s && s->fmt==3 && r->readback && p[3] && p[4] && (uint64_t)p[3]*p[4]*4<=r->readback_size && (uint64_t)p[1]+p[3]<=s->w && (uint64_t)p[2]+p[4]<=s->h) {
+  resolve(r,s); glBindFramebuffer(GL_FRAMEBUFFER,r->fbo);
+  glFramebufferTexture2D(GL_FRAMEBUFFER,GL_COLOR_ATTACHMENT0,GL_TEXTURE_2D,0,0);
+  glFramebufferTexture2D(GL_FRAMEBUFFER,GL_DEPTH_STENCIL_ATTACHMENT,GL_TEXTURE_2D,s->tex,s->level);
+  glDrawBuffer(GL_NONE); glReadBuffer(GL_NONE);
+  if(glCheckFramebufferStatus(GL_FRAMEBUFFER)==GL_FRAMEBUFFER_COMPLETE) { glPixelStorei(GL_PACK_ALIGNMENT,4); glReadPixels(p[1],p[2],p[3],p[4],GL_DEPTH_COMPONENT,GL_FLOAT,r->readback); ok=1; }
+  glDrawBuffer(GL_COLOR_ATTACHMENT0); glReadBuffer(GL_COLOR_ATTACHMENT0);
+ }
+ if(r->readback_done) __atomic_store_n(r->readback_done,p[5]|(ok?0:0x80000000u),__ATOMIC_RELEASE);
+}
 void dsr_gl_size(DSRRenderer *r,uint32_t *w,uint32_t *h) { Surf *s=surf(r,r->presented); *w=s?s->w:0; *h=s?s->h:0; }
 void dsr_gl_present(DSRRenderer *r,int width,int height) {
  Surf *s=surf(r,r->presented); if(!s) return; resolve(r,s);
@@ -568,7 +581,7 @@ int dsr_gl_exec(DSRRenderer *r,uint32_t op,const uint8_t *data,uint32_t size) {
  switch(op) {
  case DSR_RENDER_STATE: case DSR_TEXTURE: case DSR_SET_RT: need=8; break;
  case DSR_TSS: need=12; break; case DSR_TRANSFORM: need=68; break;
- case DSR_VIEWPORT: case DSR_READBACK: case DSR_SURFACE_UPLOAD: case DSR_UPLOAD_OVER: need=24; break;
+ case DSR_VIEWPORT: case DSR_READBACK: case DSR_DEPTH_READBACK: case DSR_SURFACE_UPLOAD: case DSR_UPLOAD_OVER: need=24; break;
  case DSR_DEPTH_UPLOAD: need=12; break;
  case DSR_CLEAR: need=20; break; case DSR_DRAW: need=16; break;
  case DSR_SURFACE_CREATE: need=28; break; case DSR_SURFACE_DESTROY: case DSR_PRESENT: need=4; break;
@@ -592,6 +605,7 @@ int dsr_gl_exec(DSRRenderer *r,uint32_t op,const uint8_t *data,uint32_t size) {
  case DSR_DEPTH_UPLOAD: depth_upload(r,p,size); break;
  case DSR_UPLOAD_OVER: upload(r,p,size,1); break;
  case DSR_READBACK: readback(r,p); break;
+ case DSR_DEPTH_READBACK: depth_readback(r,p); break;
  case DSR_BLT: if(p[5]) blit(r,p[0],(const int32_t *)(p+1),p[5],(const int32_t *)(p+6),0,0); else if(!(p[10]&0x20000)) blit(r,p[0],(const int32_t *)(p+1),0,(const int32_t *)(p+1),1,p[11]); break;
  case DSR_GLSL_CREATE: glsl_create(r,p,size); break;
  case DSR_PROG_USE: r->cur=p[0]; break;

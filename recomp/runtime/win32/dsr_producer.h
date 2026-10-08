@@ -6,6 +6,7 @@
 uint32_t *cmd_begin(uint32_t op, uint32_t payload);   /* a record of payload bytes; fill it, then cmd_end() */
 void cmd_end(void);
 int cmd_readback(uint32_t id, const int32_t *r, uint8_t *dst, uint32_t pitch, uint32_t bpp);   /* GPU -> CPU, synchronous */
+int cmd_depth_readback(uint32_t id, const int32_t *r, float *dst, uint32_t pitch);              /* a depth surface, as floats */
 uint32_t next_object_id(void);                         /* a renderer surface id */
 void surface_id_free(uint32_t id);
 uint32_t fvf_stride(uint32_t fvf);
