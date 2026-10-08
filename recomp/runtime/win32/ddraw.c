@@ -194,15 +194,33 @@ void cmd_end(void)
     pthread_mutex_unlock(&cmd_lock);
 }
 static uint64_t now_us(void) { return ds_clock_ns() / 1000; }
-/* Frame cadence (DSR_FPSCAP, default auto: 120 or 60 from the game's own work per frame). */
-static double cap_period_ms = -1; static int cap_auto;
+/* Frame cadence (DSR_FPSCAP, default auto: 120 or 60 from the game's own work per frame; "display": one frame per
+ * refresh of the display the window is on, dsr_display_hz, which the host keeps up to date. That is Delta Force's
+ * default: its renders between ticks (df_frame.c) would otherwise run as fast as the CPU allows. This clock and the
+ * display's are independent, so their phase can slip slowly (a frame shown twice or not at all, rarely); a feedback
+ * from the frames' presentation times would go in the shared header's phase_nudge_us.) */
+double dsr_display_hz;
+static double cap_period_ms = -1; static int cap_auto, cap_display;
+static uint64_t deadline;                         /* when the next frame will be released (cap on) */
+uint64_t dsr_cap_waited_us;                       /* time the game's thread has been held back here, in all */
+uint64_t dsr_next_present_us(void) { return cap_period_ms > 0 && !w32_deterministic ? deadline : 0; }
 static void cmd_cap_wait(void)
 {
-    static uint64_t deadline, released; static double work[120]; static int nw, upgrade_since; static uint64_t last_down;
+    static uint64_t released; static double work[120]; static int nw, upgrade_since; static uint64_t last_down;
     if (w32_deterministic) return;
     if (cap_period_ms < 0) {
-        const char *v = getenv("DSR_FPSCAP"); if (!v) v = "auto";
-        if (!strncmp(v, "auto", 4)) { cap_auto = v[4] ? 2 : 1; cap_period_ms = 1000.0 / 60; } else cap_period_ms = atof(v) > 0 ? 1000.0 / atof(v) : 0;
+        const char *v = getenv("DSR_FPSCAP");
+#ifdef DF_EDITION
+        if (!v) { const char *h = getenv("DF_HIGH_FPS"); v = h && !atoi(h) ? "auto" : "display"; }   /* DF_HIGH_FPS=0: as before */
+#endif
+        if (!v) v = "auto";
+        if (!strncmp(v, "auto", 4)) { cap_auto = v[4] ? 2 : 1; cap_period_ms = 1000.0 / 60; }
+        else if (!strcmp(v, "display")) { cap_display = 1; cap_period_ms = 1000.0 / 60; }
+        else cap_period_ms = atof(v) > 0 ? 1000.0 / atof(v) : 0;
+    }
+    if (cap_display) {                            /* follows the display (the window moved to another screen) */
+        double hz = dsr_display_hz, p = hz >= 20 && hz <= 1000 ? 1000.0 / hz : 1000.0 / 60;
+        if (p != cap_period_ms) { cap_period_ms = p; dsr_log("fps cap: the display's %.2f Hz", 1000 / p); }
     }
     uint64_t t = now_us();
     if (cap_period_ms <= 0) { released = t; return; }
@@ -227,7 +245,7 @@ static void cmd_cap_wait(void)
     }
     uint64_t period = (uint64_t)(cap_period_ms * 1000);
     if (!deadline) deadline = t;
-    if (t < deadline) { while ((t = now_us()) < deadline) { if (deadline - t > 2000) usleep(1000); } }
+    if (t < deadline) { uint64_t t0 = t; while ((t = now_us()) < deadline) { if (deadline - t > 2000) usleep(1000); } dsr_cap_waited_us += t - t0; }
     else if (t - deadline > period) deadline = t;
     deadline += period;
     released = now_us();
@@ -259,6 +277,7 @@ static void cmd_frame(void)
     }
 #else
     while (frames - __atomic_load_n(&shm->frames_done, __ATOMIC_ACQUIRE) > 2 && now_us() - t0 < 250000) usleep(50);
+    dsr_cap_waited_us += now_us() - t0;
 #endif
 }
 static uint32_t rb_cookie; static pthread_mutex_t rb_lock = PTHREAD_MUTEX_INITIALIZER;

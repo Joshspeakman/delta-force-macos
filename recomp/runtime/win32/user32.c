@@ -470,8 +470,16 @@ IMPL(user32, SetCursorPos)
 }
 void w32_set_cursor(int x, int y) { pthread_mutex_lock(&cursor_lock); cursor_x = x; cursor_y = y; cursor_epoch++; pthread_mutex_unlock(&cursor_lock); }
 /* relative motion from the host, applied to the cursor the game last read or set (it re-centres it every frame) */
+#ifdef DF_EDITION
+/* the same motion, summed and never clamped to the screen: Delta Force's mouse-look takes it from here once a tick, and
+ * its renders between ticks look ahead by what the next tick has not taken yet (df_frame.c) */
+int32_t w32_raw_dx, w32_raw_dy;
+#endif
 void w32_move_cursor(int dx, int dy, int w, int h, int *ox, int *oy)
 {
+#ifdef DF_EDITION
+    __atomic_add_fetch(&w32_raw_dx, dx, __ATOMIC_RELAXED); __atomic_add_fetch(&w32_raw_dy, dy, __ATOMIC_RELAXED);
+#endif
     pthread_mutex_lock(&cursor_lock);
 #ifdef DF_EDITION
     if (w < w32_screen_w) w = w32_screen_w; if (h < w32_screen_h) h = w32_screen_h;   /* windowed: the window's centre is in desktop coordinates */

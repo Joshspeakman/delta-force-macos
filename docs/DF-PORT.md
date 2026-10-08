@@ -58,6 +58,21 @@ and the host follows it (Linux host and Mac host).
 **Audio.** One streaming DirectSound buffer that the game mixes into from a multimedia timer; works as is. DF2's MSACM
 calls (IMA and Microsoft ADPCM) are decoded in df_imports.c.
 
+**High frame rates** (df_frame.c; `DF_HIGH_FPS=0` turns it off). Both games tick the world every 16 ms and draw once
+after each tick. In a mission (the Game Loop state) the main loop's Sleep(0) path also renders, one frame per refresh
+of the display the window is on: the frame cap's `display` setting (ddraw.c, Delta Force's default; the host reports
+the refresh rate, `NSScreen.maximumFramesPerSecond` or the display mode's exact rate). A render only reads the world (a
+second render in a tick changes nothing but counters), so the simulation, its 16 ms, the recorded commands (demo,
+network) are unchanged. Each frame shows the world between the last two ticks: the positions and angles of the five
+object arrays the render draws (0x114-byte entries) are kept at each tick start, written in between for the render and
+put back after it; objects snap when their slot holds a new object, they die or come back, or they jump. Mouse-look is
+immediate: the tick takes the host's raw motion (the games' own WM_MOUSEMOVE/SetCursorPos measurement loses motion that
+arrives between reading and re-centring, often once frames outnumber ticks) and each render turns the player by the
+motion the next tick has not taken yet, through the game's own sensitivity and zoom scale. Renders start just before
+their frame is due, so the mouse is read late and every frame alike; below 62.5 Hz the game's own render is left out
+when its frame belongs after the next tick. The muzzle flash bits a tick sets are set again for each render of that
+tick. Menus and the multiplayer score screen are as before.
+
 ## Delta Force 1: Full Screen Hardware
 
 DF1 shipped software-only; this port adds a hardware mode built the way DF2's Direct3D driver works
@@ -262,6 +277,9 @@ Switches:
 | `W32_SMCLOG=1` | code bytes changed at run time |
 | `W32_DDLOG=1` | DirectDraw/Direct3D calls and each distinct draw state |
 | `DF_MOUSELOG=1` | SetCursorPos and posted mouse messages |
+| `DF_HIGH_FPS=0` | one frame per tick, as the games shipped (frame cap back to `auto`) |
+| `DF_FRAME_LOG=1\|2\|3` | per second: ticks, renders, in-between frames, late frames; 2: every tick and frame; 3: every wait (disturbs the timing) |
+| `DSR_FPSCAP=<fps>\|display\|auto\|0` | the frame cap (Delta Force: `display`, the window's display) |
 | `DF_HARDWARE=1`, `DF_HWLOG=1` | DF1 Full Screen Hardware in any 32-bit mode; a line a second (polygons, draws, textures, syncs, readback cost, the object part's time with or without the GPU) and each new polygon kind |
 | `DF_HW_DUAL=<n>` `DF_HW_DUAL_DIR=<dir>` `DF_HW_DUAL_FROM=<seg>` | the CPU draws every polygon too (its picture stays on screen); every n-th frame both pictures of that frame go to `<dir>/<frame>_cpu.ppm` / `_gpu.ppm` |
 | `DF_HW_POINT=1`, `DF_HW_MIPS=0` | nearest, affine texturing as the CPU does (pixel comparisons); no mipmaps |
