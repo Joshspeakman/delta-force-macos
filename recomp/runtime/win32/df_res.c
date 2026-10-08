@@ -64,6 +64,7 @@ extern int w32_screen_w, w32_screen_h;
 #define RD(a)    rt_r32(G_MEM, (uint32_t)(a))
 #define WR(a, v) rt_w32(G_MEM, (uint32_t)(a), (uint32_t)(v))
 #define RES_MAX_W 2048                           /* DF1's polygon edge lists; the moved arrays hold more */
+#define RES_PI 3.14159265358979323846           /* (M_PI is not standard C) */
 #define RES_MAX_H 768                            /* the renderers' row tables */
 #ifdef DF1_EDITION
 #define RES_ALIGN 16
@@ -209,8 +210,8 @@ int df_res_hook(Ctx *c, uint32_t addr)
     case 0x4661da: {                                     /* main view: [esp+4] = the request, +0x48 the angle */
         if (!custom_mode()) return 1;
         uint32_t req = RD(c->esp + 4); int fov = (int)RD(req + 0x48);
-        double half = hor_plus(fov / 2.0 / 65536.0 * M_PI / 180.0, (double)(int)RD(req + 0x24), (double)(int)RD(req + 0x28));
-        WR(req + 0x48, (uint32_t)(int)(2.0 * half * 180.0 / M_PI * 65536.0 + 0.5));
+        double half = hor_plus(fov / 2.0 / 65536.0 * RES_PI / 180.0, (double)(int)RD(req + 0x24), (double)(int)RD(req + 0x28));
+        WR(req + 0x48, (uint32_t)(int)(2.0 * half * 180.0 / RES_PI * 65536.0 + 0.5));
         return 1;
     }
     case 0x4665e0: case 0x4672c0:                        /* HUD bitmaps and layout for this width */
