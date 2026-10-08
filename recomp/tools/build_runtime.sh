@@ -7,6 +7,7 @@ if [[ $(uname -s) == Linux ]]; then exec "$HERE/tools/build_linux.sh" "$OUT"; fi
 EDITION_FLAGS=()
 [[ -f "$OUT/Df.exe" ]] && EDITION_FLAGS=(-DDF_EDITION -DDF1_EDITION)
 [[ -f "$OUT/Df2.exe" ]] && EDITION_FLAGS=(-DDF_EDITION -DDF2_EDITION)
+SAN=(); [[ -n "${DF_SANITIZE:-}" ]] && SAN=(-fsanitize="$DF_SANITIZE" -fno-omit-frame-pointer)   # development: e.g. DF_SANITIZE=address
 INC=(-I "$HERE/runtime" -I "$HERE/runtime/win32" -I "$HERE/third_party/mojoshader" -I "$HERE/third_party/minimp3" -I "$HERE/third_party/vulkan/include")
 python3 "$HERE/tools/gen_imptab.py" "$OUT/imptab.c" "$HERE"/runtime/win32/*.c
 # MojoShader (d3d9_shader.c): as on Linux, the GLSL profile only (the Delta Force games never use Direct3D 9 shaders)
@@ -19,7 +20,7 @@ for f in "$HERE"/third_party/mojoshader/mojoshader.c "$HERE"/third_party/mojosha
 done
 for f in "$HERE"/runtime/rt.c "$HERE"/runtime/win32/*.c "$OUT/imptab.c"; do
   opt=-O1; [ "$(basename "$f")" = native.c ] && opt="-O3 -ffp-contract=off"   # the native hot loops: optimised, no fused multiply-add
-  clang -c $opt -g -Wall -Wno-unused-function -fno-strict-aliasing "${EDITION_FLAGS[@]}" "${INC[@]}" -o "$OUT/obj/rt/$(basename "$f" .c).o" "$f" &
+  clang -c $opt -g -Wall -Wno-unused-function -fno-strict-aliasing ${SAN[@]+"${SAN[@]}"} "${EDITION_FLAGS[@]}" "${INC[@]}" -o "$OUT/obj/rt/$(basename "$f" .c).o" "$f" &
 done; wait
-clang -shared -o "$OUT/libgame.dylib" "$OUT"/obj/*.o "$OUT"/obj/rt/*.o "$OUT"/obj/rt/mojo/*.o -framework CoreText -framework CoreGraphics -framework CoreFoundation -framework AudioToolbox -lz
+clang -shared ${SAN[@]+"${SAN[@]}"} -o "$OUT/libgame.dylib" "$OUT"/obj/*.o "$OUT"/obj/rt/*.o "$OUT"/obj/rt/mojo/*.o -framework CoreText -framework CoreGraphics -framework CoreFoundation -framework AudioToolbox -lz
 "$HERE/tools/build_app.sh" "$OUT"

@@ -236,6 +236,32 @@ static int allowed(uint32_t ip)                         /* ip: the sender as the
     pthread_mutex_unlock(&s_lock);
     return ok;
 }
+/* W32_NETFUZZ=<seed>[:<percent>] (development, test mode only): datagrams arriving on the game port are damaged before
+ * the game sees them (bits flipped, bytes changed, cut short, or lengthened with junk up to the game's buffer), a
+ * percentage of them (default 30). With a runtime built with DF_SANITIZE=address, this checks what a malicious peer's
+ * datagrams can do to the game's network code and the runtime under it. */
+static ssize_t netfuzz(uint8_t *b, ssize_t n, uint32_t cap)
+{
+    static int on = -1; static uint64_t st; static unsigned pct = 30; static long count;
+    if (on < 0) {
+        const char *e = getenv("W32_NETFUZZ"); on = e && getenv("DS_TEST") && atoi(getenv("DS_TEST"));
+        if (on) { st = strtoull(e, 0, 10) * 0x9e3779b97f4a7c15ull + 1; const char *p = strchr(e, ':'); if (p) pct = (unsigned)atoi(p + 1); }
+    }
+    if (!on) return n;
+    #define R() (st ^= st << 13, st ^= st >> 7, st ^= st << 17, (uint32_t)(st >> 11))
+    if (R() % 100 >= pct) return n;
+    count++;
+    switch (R() % 5) {
+    case 0: for (int k = 1 + (int)(R() % 4); k > 0 && n > 0; k--) b[R() % (uint32_t)n] ^= (uint8_t)(1u << (R() % 8)); break;
+    case 1: for (int k = 1 + (int)(R() % 8); k > 0 && n > 0; k--) b[R() % (uint32_t)n] = (uint8_t)R(); break;
+    case 2: if (n > 0) n = R() % (uint32_t)n; break;
+    case 3: { ssize_t m = n + 1 + (ssize_t)(R() % 2048); if (m > (ssize_t)cap) m = cap; for (ssize_t k = n; k < m; k++) b[k] = (uint8_t)R(); n = m; break; }
+    case 4: if (n >= 4) { uint32_t at = R() % (uint32_t)(n - 3); uint32_t v = R() % 3 ? 0xffffffffu : R(); memcpy(b + at, &v, 4); } break;   /* a length or count */
+    }
+    #undef R
+    if (count % 500 == 0) fprintf(stderr, "net: %ld datagrams damaged (W32_NETFUZZ)\n", count);
+    return n;
+}
 IMPL(wsock32, ord23)                                    /* socket(af, type, protocol) */
 {
     uint32_t af = ARG(0), type = ARG(1), proto = ARG(2);
@@ -369,6 +395,13 @@ IMPL(wsock32, ord17)                                    /* recvfrom(s, buf, len,
         l = sizeof a; n = recvfrom(fd, GP(ARG(1)), ARG(2), (int)(ARG(3) & 3) | MSG_DONTWAIT, (struct sockaddr *)&a, &l);
     }
     if (n < 0) RET(fail_errno(c), 6);
+    if (n >= 0 && fd == game_fd) n = netfuzz(GP(ARG(1)), n, ARG(2));
+    if (n > 0 && fd == game_fd && getenv("W32_NETCAPTURE") && getenv("DS_TEST")) {   /* development: a corpus of what arrives */
+        static FILE *cf; static pthread_mutex_t cl = PTHREAD_MUTEX_INITIALIZER; pthread_mutex_lock(&cl);
+        if (!cf) cf = fopen(getenv("W32_NETCAPTURE"), "ab");
+        if (cf) { uint16_t l16 = (uint16_t)n; fwrite(&l16, 2, 1, cf); fwrite(GP(ARG(1)), 1, (size_t)n, cf); fflush(cf); }
+        pthread_mutex_unlock(&cl);
+    }
     if (getenv("W32_NETLOG")) { char ip[32]; inet_ntop(AF_INET, &a.sin_addr, ip, sizeof ip); fprintf(stderr, "net: recvfrom %x %zd bytes from %s:%u\n", ARG(0), n, ip, ntohs(a.sin_port));
         static int dumps; if (getenv("W32_NETDUMP") && dumps++ < 3) { for (ssize_t k = 0; k < n; k++) fprintf(stderr, "%s%02x", k % 32 ? " " : "\n  ", G_MEM[ARG(1) + (uint32_t)k]); fprintf(stderr, "\n"); } }
     if (fd == game_fd && !w32_netvirt()) learn(&a);
