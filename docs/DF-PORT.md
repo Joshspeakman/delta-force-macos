@@ -123,7 +123,8 @@ mode. `DF_RES=WxH` sets the size (a taller one is scaled down to 768 lines, keep
 - Limits removed by moving arrays (`tools/lift.py` `DF_MOVED`, the 'res' entries): the lifter rewrites the address
   field of each listed instruction (before decoding, so every use follows) to a block above the image that the runtime
   commits at load time (`loader.c`, `rt_blocks` in fntab.c), one reservation with an uncommitted page after each block
-  (an overrun faults). The build stops if any other instruction or fixup still names an address inside a moved array.
+  (an overrun faults); each block starts at its array's offset within the 4 KB page (DF1's clouds depend on low address
+  bits; so 1024x768 stays pixel for pixel the original). The build stops if any other instruction or fixup still names an address inside a moved array.
   DF1: the terrain's per-column-pair records (0xcb8d84, 512 pairs) and per-column offsets (0xc975a8, 1024), and the
   static z buffer (0x503740: 2·W·(H−H/8) bytes, past it from 1152x768); DF2: the terrain's per-column tables 0x51d60c
   and 0x532610 (1028 columns), kept 0x15004 apart (0x4728dd reads one through a pointer into the other).
@@ -137,7 +138,7 @@ mode. `DF_RES=WxH` sets the size (a taller one is scaled down to 768 lines, keep
   hard-coded 0x300 (DF1 0x48994f/0x48996e and 0xc93ea4, 0xc94aa4; DF2 0x4726fa/0x472701 and 0x533620, 0x51a908 for 960
   rows). Moving the structures (or every displacement) and an audit of the polygon/sprite rasterizers would be needed,
   and the CPU renderers draw 2-10 times the pixels. DF1 also faults in its polygon edge lists (0x46cc30) from 2304
-  columns on (cause not found; the moved arrays have room for 2560).
+  columns on (cause not found; the moved arrays have room for more).
 
 ## Verified on Linux (against Proton)
 

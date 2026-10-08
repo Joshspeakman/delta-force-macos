@@ -10,7 +10,7 @@
  * the same height, its horizontal angle grows (90 degrees at 4:3, 106 at 16:9; the scope's 22 degrees likewise).
  * Narrower than 4:3 (5:4) keeps the horizontal angle and sees more above and below. Limits: 768 lines (row tables
  * inside the renderers' structures, at fixed offsets in hundreds of instructions) and 2048 columns (the per-column
- * arrays the lifter moved to bigger blocks have room for 2560: DF_MOVED; DF1 faults in its polygon edge lists
+ * arrays the lifter moved to bigger blocks have room for more: DF_MOVED; DF1 faults in its polygon edge lists
  * (0x46cc30) from 2304 columns on, DF2 ran at 2560); a screen wider than 8:3 gets fewer lines (2048x576 at 32:9). Widths are
  * multiples of 16 (DF1: its present copies 16-byte blocks of 8-bit pixels, the terrain draws column pairs) or 8 (DF2:
  * the hardware driver's copy of the CPU-drawn terrain goes 8 pixels at a time).
@@ -63,7 +63,7 @@
 extern int w32_screen_w, w32_screen_h;
 #define RD(a)    rt_r32(G_MEM, (uint32_t)(a))
 #define WR(a, v) rt_w32(G_MEM, (uint32_t)(a), (uint32_t)(v))
-#define RES_MAX_W 2048                           /* DF1's polygon edge lists; the moved arrays hold 2560 */
+#define RES_MAX_W 2048                           /* DF1's polygon edge lists; the moved arrays hold more */
 #define RES_MAX_H 768                            /* the renderers' row tables */
 #ifdef DF1_EDITION
 #define RES_ALIGN 16

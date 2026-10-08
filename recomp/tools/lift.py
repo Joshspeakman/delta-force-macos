@@ -137,30 +137,33 @@ DF_OVERRIDES = {
 # reservation: the uncommitted 16 KB host page after each block faults if the game writes past its end. An instruction
 # that names an address inside an old array but is not listed stops the build (constants and neighbours that merely
 # fall in the range are listed under 'other').
-#   old, size: the array in the executable; new, new_size: the block (its end on a 16 KB boundary, 16 KB free after it)
+#   old, size: the array in the executable; new, new_size: the block. It starts at the old array's offset within its
+#   4 KB page (what the renderers draw depends on low address bits: DF1's clouds came out different with the arrays
+#   page-aligned; with the same offsets 1024x768 is pixel for pixel the original), ends on a 16 KB boundary and has
+#   16 KB free after it.
 DF_MOVED = {
     'res': {
         'df1': [
-            dict(old=0x00503740, size=0x17a000, new=0x7e004000, new_size=0x780000,
-                 what='16-bit z buffer (2*W*(H-H/8) bytes; also the picture-in-picture scratch, 4*W*H): 2560x768',
+            dict(old=0x00503740, size=0x17a000, new=0x7e004740, new_size=0x77f8c0,
+                 what='16-bit z buffer (2*W*(H-H/8) bytes; also the scope\'s scratch, 4*W*H): 2048x768 and more',
                  sites=(0x402a2b, 0x402ac5, 0x403912, 0x403969, 0x4039ce, 0x403a24, 0x404584, 0x4045d0, 0x4048b8, 0x440929),
                  # constants 6.0 / 100.0 in 16.16 (clamps); the byte table at 0x67d740 after it, indexed from 1
                  other=(0x44daf9, 0x44db04, 0x44f6cc, 0x44f6d8, 0x44f782, 0x44f8f7, 0x44f903, 0x44f9b3, 0x44fb13, 0x44fb1b,
                       0x44fb8e, 0x450d1b, 0x45123c, 0x451d9c, 0x45e47a, 0x45e486, 0x45e54f, 0x45e6c9, 0x45e6d5, 0x45e783,
                       0x4851fc, 0x48e431, 0x48e462, 0x48e478, 0x48e4c5, 0x48eee6, 0x48df77, 0x48dfed)),
-            dict(old=0x00cb8d84, size=0x6000, new=0x7e789000, new_size=0xf000,
-                 what='terrain records per column pair (48 bytes): 512 pairs (W <= 1024) -> 1280 (W <= 2560)',
+            dict(old=0x00cb8d84, size=0x6000, new=0x7e789d84, new_size=0xe27c,
+                 what='terrain records per column pair (48 bytes): 512 pairs (W <= 1024) -> 1207',
                  sites=(0x48930f, 0x489356, 0x4893b0, 0x489ae0, 0x48c353, 0x48c501), other=()),
-            dict(old=0x00c975a8, size=0x1000, new=0x7e79d800, new_size=0x2800,
-                 what='terrain row offset per column: 1024 columns -> 2560',
+            dict(old=0x00c975a8, size=0x1000, new=0x7e79d5a8, new_size=0x2a58,
+                 what='terrain row offset per column: 1024 columns -> 2710',
                  sites=(0x4899d8, 0x489ba9), other=()),
         ],
         'df2': [
             # 0x4728dd reads the first array through a pointer into the second ([edi-0x15004]): same distance here
-            dict(old=0x0051d60c, size=0x1400, new=0x7e00d800, new_size=0x2800,
-                 what='terrain offset per column: 1280 columns -> 2560', sites=(0x472342,), other=()),
-            dict(old=0x00532610, size=0x1010, new=0x7e00d800 + 0x15004, new_size=0x57fc,
-                 what='terrain perspective correction per column: 1028 columns -> 5631', sites=(0x472746, 0x472869), other=()),
+            dict(old=0x0051d60c, size=0x1400, new=0x7e00d60c, new_size=0x29f4,
+                 what='terrain offset per column: 1280 columns -> 2685', sites=(0x472342,), other=()),
+            dict(old=0x00532610, size=0x1010, new=0x7e00d60c + 0x15004, new_size=0x59f0,
+                 what='terrain perspective correction per column: 1028 columns -> 5756', sites=(0x472746, 0x472869), other=()),
         ],
     },
     'frame': {'df1': [], 'df2': []},
@@ -174,6 +177,7 @@ def df_moved(features, edition):
         end = m['new'] + m['new_size']
         assert BLOCK_ARENA[0] + 0x4000 <= m['new'] and end + 0x4000 <= BLOCK_ARENA[1] and not end & 0x3fff, \
             'DF %s %#x: block %#x+%#x must end on a 16 KB boundary inside the arena' % (m['feature'], m['old'], m['new'], m['new_size'])
+        assert not (m['new'] ^ m['old']) & 0xfff, 'DF %s %#x: the block must start at the same offset in its page' % (m['feature'], m['old'])
         assert k + 1 == len(out) or end + 0x4000 <= (out[k + 1]['new'] & ~0x3fff), 'DF %s %#x: no guard page after it' % (m['feature'], m['old'])
     return out
 
