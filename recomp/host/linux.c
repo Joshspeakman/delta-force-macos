@@ -8,6 +8,8 @@
 #include <unistd.h>
 #include <ctype.h>
 #include <signal.h>
+#include <errno.h>
+#include <string.h>
 #include "../runtime/win32/w32.h"
 #include "../runtime/win32/display_modes.h"
 #include "../runtime/platform.h"
@@ -366,6 +368,72 @@ static int events(void) {
  }
  return 1;
 }
+#ifdef DF_EDITION
+/* The game process in a Landlock sandbox (Linux 5.13 and later; the macOS host uses the system sandbox), for the same
+ * reason as on the Mac: a public multiplayer game puts 1998 network code within reach of anyone. Applied first thing,
+ * so every thread is under it. The process can read the system's folders, the game, program and data folders and
+ * what graphics and fonts need in the home folder (.cache, .config, .local/share); it can write only the data folder,
+ * temporary files, devices and the session's runtime folder (display and sound sockets); it can run no program. The
+ * rest of the home folder and other drives can't be read. DF_NO_SANDBOX=1 leaves it out; an older kernel without
+ * Landlock runs as before. */
+#include <linux/landlock.h>
+#include <sys/prctl.h>
+#include <sys/syscall.h>
+#include <fcntl.h>
+static void landlock_path(int rs, const char *path, uint64_t access)
+{
+    if (!path || !*path) return;
+    int fd = open(path, O_PATH | O_CLOEXEC); if (fd < 0) return;
+    struct landlock_path_beneath_attr pb = { .allowed_access = access, .parent_fd = fd };
+    struct stat st; if (!fstat(fd, &st) && !S_ISDIR(st.st_mode)) pb.allowed_access &= LANDLOCK_ACCESS_FS_EXECUTE | LANDLOCK_ACCESS_FS_WRITE_FILE | LANDLOCK_ACCESS_FS_READ_FILE
+#ifdef LANDLOCK_ACCESS_FS_TRUNCATE
+        | LANDLOCK_ACCESS_FS_TRUNCATE
+#endif
+        ;
+    syscall(SYS_landlock_add_rule, rs, LANDLOCK_RULE_PATH_BENEATH, &pb, 0);
+    close(fd);
+}
+static void enter_sandbox(const char *exe, const char *game, const char *data, const char *bin)
+{
+    if (getenv("DF_NO_SANDBOX") && atoi(getenv("DF_NO_SANDBOX"))) { fprintf(stderr, "host: no sandbox (DF_NO_SANDBOX)\n"); return; }
+    int abi = (int)syscall(SYS_landlock_create_ruleset, NULL, 0, LANDLOCK_CREATE_RULESET_VERSION);
+    if (abi < 1) { fprintf(stderr, "host: no sandbox (this kernel has no Landlock)\n"); return; }
+    uint64_t rd = LANDLOCK_ACCESS_FS_READ_FILE | LANDLOCK_ACCESS_FS_READ_DIR;
+    uint64_t wr = rd | LANDLOCK_ACCESS_FS_WRITE_FILE | LANDLOCK_ACCESS_FS_REMOVE_DIR | LANDLOCK_ACCESS_FS_REMOVE_FILE | LANDLOCK_ACCESS_FS_MAKE_DIR |
+                  LANDLOCK_ACCESS_FS_MAKE_REG | LANDLOCK_ACCESS_FS_MAKE_SOCK | LANDLOCK_ACCESS_FS_MAKE_FIFO;
+    uint64_t handled = wr | LANDLOCK_ACCESS_FS_EXECUTE | LANDLOCK_ACCESS_FS_MAKE_CHAR | LANDLOCK_ACCESS_FS_MAKE_BLOCK | LANDLOCK_ACCESS_FS_MAKE_SYM;
+#ifdef LANDLOCK_ACCESS_FS_REFER
+    if (abi >= 2) { handled |= LANDLOCK_ACCESS_FS_REFER; wr |= LANDLOCK_ACCESS_FS_REFER; }
+#endif
+#ifdef LANDLOCK_ACCESS_FS_TRUNCATE
+    if (abi >= 3) { handled |= LANDLOCK_ACCESS_FS_TRUNCATE; wr |= LANDLOCK_ACCESS_FS_TRUNCATE; }
+#endif
+    struct landlock_ruleset_attr ra = { .handled_access_fs = handled };
+    int rs = (int)syscall(SYS_landlock_create_ruleset, &ra, sizeof ra, 0);
+    if (rs < 0) { fprintf(stderr, "host: no sandbox (Landlock: %s)\n", strerror(errno)); return; }
+    static const char *sys_read[] = {"/usr", "/lib", "/lib64", "/bin", "/sbin", "/etc", "/opt", "/proc", "/sys", "/var", "/nix", "/snap"};
+    for (size_t k = 0; k < sizeof sys_read / sizeof *sys_read; k++) landlock_path(rs, sys_read[k], rd);
+    static const char *sys_write[] = {"/tmp", "/dev", "/run"};
+    for (size_t k = 0; k < sizeof sys_write / sizeof *sys_write; k++) landlock_path(rs, sys_write[k], wr);
+    char p[4096]; const char *home = getenv("HOME");
+    if (home) {
+        snprintf(p, sizeof p, "%s/.cache", home); landlock_path(rs, p, wr);                     /* shader caches */
+        snprintf(p, sizeof p, "%s/.config", home); landlock_path(rs, p, rd);
+        snprintf(p, sizeof p, "%s/.local/share", home); landlock_path(rs, p, rd);               /* fonts, icons */
+        snprintf(p, sizeof p, "%s/.Xauthority", home); landlock_path(rs, p, rd);
+        snprintf(p, sizeof p, "%s/.fonts", home); landlock_path(rs, p, rd);
+    }
+    landlock_path(rs, getenv("XDG_RUNTIME_DIR"), wr);
+    landlock_path(rs, game, rd); landlock_path(rs, bin, rd);
+    snprintf(p, sizeof p, "%s", exe); char *sl = strrchr(p, '/'); if (sl) { *sl = 0; landlock_path(rs, p, rd); }
+    landlock_path(rs, data, wr);
+    if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) || syscall(SYS_landlock_restrict_self, rs, 0)) {
+        fprintf(stderr, "host: no sandbox (Landlock: %s)\n", strerror(errno)); close(rs); return;
+    }
+    close(rs);
+    fprintf(stderr, "host: sandboxed (Landlock ABI %d: reads the game, program and data folders; writes the data folder)\n", abi);
+}
+#endif
 int main(int argc,char **argv) {
  const char *exe=NULL,*game=NULL,*data=NULL;
  for(int i=1;i<argc;i++) {
@@ -375,6 +443,9 @@ int main(int argc,char **argv) {
   else { fprintf(stderr,"Usage: %s --exe <verified game exe> --game <game folder> --data <writable data folder>\n",argv[0]); return 1; }
  }
  if(!exe||!game||!data) { fprintf(stderr,"--exe, --game and --data are required\n"); return 1; }
+#ifdef DF_EDITION
+ { mkdirs(data); char self[2048]; ssize_t n=readlink("/proc/self/exe",self,sizeof self-1); if(n>0) { self[n]=0; char *sl=strrchr(self,'/'); if(sl) *sl=0; enter_sandbox(exe,game,data,self); } }
+#endif
  test_mode=getenv("DS_TEST")&&atoi(getenv("DS_TEST"));
  signal(SIGINT,stop_host); signal(SIGTERM,stop_host);
  const char *title=getenv("DS_TEST_LAB") && !strcmp(getenv("DS_TEST_LAB"),"1")
