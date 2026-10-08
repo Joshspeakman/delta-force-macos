@@ -4,6 +4,7 @@
 //   DungeonSiegeNative --exe <DungeonSiege.exe> --game <game folder> --data <folder for C: and saved files>
 #include <pwd.h>
 #include <sandbox.h>
+#include <spawn.h>
 #import <AppKit/AppKit.h>
 #import <Metal/Metal.h>
 #import <QuartzCore/QuartzCore.h>
@@ -594,6 +595,37 @@ static void enter_sandbox(const char *exe, const char *game, const char *data, c
 }
 #endif
 
+#ifdef DF_EDITION
+/* Opened from Finder (no arguments): the app's own settings, written by install.sh in Contents/Resources/launch.plist
+ * (game folder, data folder, log name, executable, updater), do what the generated launcher script does. The bundle's
+ * executable is this binary, not a script: macOS only recognises a game, and so only turns on Game Mode, for a bundle
+ * whose executable is the program itself. DF_GAME_DIR and DF_DATA_DIR still override the folders. */
+static int bundle_launch(const char *argv0, const char **exe, const char **game, const char **data)
+{
+    NSString *bin = [@(argv0) stringByDeletingLastPathComponent], *res = [bin stringByAppendingPathComponent:@"../Resources"].stringByStandardizingPath;
+    NSDictionary *cfg = [NSDictionary dictionaryWithContentsOfFile:[res stringByAppendingPathComponent:@"launch.plist"]];
+    if (!cfg[@"game"] || !cfg[@"data"]) return 0;
+    NSString *g = getenv("DF_GAME_DIR") ? @(getenv("DF_GAME_DIR")) : cfg[@"game"], *d = getenv("DF_DATA_DIR") ? @(getenv("DF_DATA_DIR")) : cfg[@"data"];
+    NSFileManager *fm = NSFileManager.defaultManager;
+    [fm createDirectoryAtPath:d withIntermediateDirectories:YES attributes:nil error:nil];
+    NSString *log = [d stringByAppendingPathComponent:[cfg[@"log"] ?: @"DeltaForce" stringByAppendingString:@".log"]];
+    if (!getenv("DS_NO_LAUNCHER") && [[fm attributesOfItemAtPath:log error:nil] fileSize] > 5000000) {   /* keep the log small: previous one as .old */
+        NSString *old = [[log stringByDeletingPathExtension] stringByAppendingString:@".old.log"];
+        [fm removeItemAtPath:old error:nil]; [fm moveItemAtPath:log toPath:old error:nil];
+    }
+    freopen(log.fileSystemRepresentation, "a", stderr);
+    setenv("DS_LOG_FILE", log.fileSystemRepresentation, 1);                                      /* crash reports attach this log */
+    NSString *upd = [bin stringByAppendingPathComponent:@"update"];
+    if ([fm isExecutableFileAtPath:upd] && cfg[@"branch"]) {                                       /* the launcher's Updates row */
+        setenv("DS_UPDATER", upd.fileSystemRepresentation, 1); setenv("DS_UPDATE_BRANCH", [cfg[@"branch"] UTF8String], 1);
+        setenv("DS_BUILT_COMMIT", [cfg[@"built"] ?: @"" UTF8String], 1);
+    }
+    *exe = strdup([res stringByAppendingPathComponent:cfg[@"exe"] ?: @GAME_EXE].fileSystemRepresentation);
+    *game = strdup(g.fileSystemRepresentation); *data = strdup(d.fileSystemRepresentation);
+    return 1;
+}
+#endif
+
 int main(int argc, char **argv)
 {
     @autoreleasepool {
@@ -603,6 +635,9 @@ int main(int argc, char **argv)
             else if (!strcmp(argv[k], "--game")) game = argv[k + 1];
             else if (!strcmp(argv[k], "--data")) data = argv[k + 1];
         }
+#ifdef DF_EDITION
+        if (!exe && !game && !data) bundle_launch(argv[0], &exe, &game, &data);
+#endif
         if (!exe || !game || !data) { fprintf(stderr, "usage: DungeonSiegeNative --exe <DungeonSiege2.exe> --game <game folder> --data <data folder>\n"); return 1; }
         NSString *bin = [[NSString stringWithUTF8String:argv[0]] stringByDeletingLastPathComponent];
         snprintf(dsr_snapshot_path, sizeof dsr_snapshot_path, "%s/dsr_snapshot.bin", bin.UTF8String);
@@ -614,13 +649,24 @@ int main(int argc, char **argv)
         init_keymap();
         {   /* the launch window (resolution, frame rate, updates) unless in test mode */
             int ds_launcher_run(const char *game_dir, const char *data_dir);
-#ifdef DF_EDITION
-            if (0) {                                                  // Delta Force: its own settings screen (renderer, resolution) is the launcher
-#else
             if (!getenv("DS_TEST") || getenv("DS_LAUNCHER_SHOT")) {
-#endif
                 [NSApplication sharedApplication]; [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
+                int shown = !getenv("DS_NO_LAUNCHER");
                 if (!ds_launcher_run(game, data)) return 0;
+#ifdef DF_EDITION
+                /* Play: the game in a fresh process (the choices are saved, and in the environment), this one ends. A game
+                 * window shown by the process that ran the launch window can stay off screen in macOS full screen (seen in
+                 * the Diablo II port); a process that never showed it always comes up. Before the sandbox, which forbids it. */
+                if (shown && !getenv("DS_LAUNCHER_SHOT") && !getenv("DS_SAME_PROCESS")) {
+                    extern char **environ; setenv("DS_NO_LAUNCHER", "1", 1); pid_t pid;
+                    int rc = posix_spawn(&pid, argv[0], NULL, NULL, argv, environ);
+                    fprintf(stderr, "%s: the game in a new process (%d, %s)\n", DS2_TITLE, rc ? -1 : (int)pid, rc ? strerror(rc) : "started");
+                    if (rc == 0) return 0;
+                    unsetenv("DS_NO_LAUNCHER");                           /* could not: carry on here */
+                }
+#else
+                (void)shown;
+#endif
             }
         }
         w32_crash_init(data, DS_BUILD); w32_crash_thread("macOS UI thread");

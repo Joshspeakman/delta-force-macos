@@ -1,108 +1,38 @@
-// The launch window: resolution, frame rate and updates, remembered in <data>/launcher.plist, then Play.
-// Its look comes from the game itself, read at launch from the player's own Resources/Objects.ds2res (the main menu's
-// logo, red backdrop and wooden menu bars) and set in Copperplate. Nothing from the game is stored in this project;
-// without the archive the window falls back to plain colours.
+// The launch window: screen shape, frame rate, multiplayer and updates, remembered in <data>/launcher.plist, then Play.
+// Its art is fetched at install time (tools/df_art.py: the game's logo and textured backdrop from its Steam store page,
+// or failing that the game's own splash and menu screens) into <data>/art, and a copy in the app's Resources/art.
+// Nothing from the game is stored in this project; without the art the window writes the title in plain colours.
+// The renderer (Colors: 256 / 16 Million / Hardware) and the in-game resolution stay in the game's own settings screen.
 #import <AppKit/AppKit.h>
-#import <Metal/Metal.h>
-#import <ImageIO/ImageIO.h>
-#include <CommonCrypto/CommonDigest.h>
-#include <zlib.h>
-#include <arpa/inet.h>
-#include <ifaddrs.h>
-#include <net/if.h>
-
-// ---------------------------------------------------------------- reading textures from a tank (.dsres) archive
-static NSData *tank_read(NSString *tankPath, NSString *want)
-{
-    NSData *file = [NSData dataWithContentsOfFile:tankPath options:NSDataReadingMappedIfSafe error:nil];
-    if (file.length < 64) return nil;
-    const uint8_t *d = file.bytes; size_t n = file.length;
-    #define U32(o) (*(const uint32_t *)(d + (o)))
-    #define U16(o) (*(const uint16_t *)(d + (o)))
-    if (memcmp(d, "DSigTank", 8) && memcmp(d, "DSg2Tank", 8)) return nil;   /* Dungeon Siege, Dungeon Siege II */
-    uint32_t dirset = U32(12), fileset = U32(16), dataoff = U32(24);
-    if (dirset >= n || fileset >= n) return nil;
-    NSMutableDictionary<NSNumber *, NSString *> *dirs = [NSMutableDictionary dictionary];
-    NSMutableDictionary<NSNumber *, NSNumber *> *parents = [NSMutableDictionary dictionary];
-    for (uint32_t k = 0, nd = U32(dirset); k < nd; k++) {
-        uint32_t off = U32(dirset + 4 + 4 * k), o = dirset + off; uint16_t len = U16(o + 16);
-        dirs[@(off)] = [[NSString alloc] initWithBytes:d + o + 18 length:len encoding:NSISOLatin1StringEncoding];
-        parents[@(off)] = @(U32(o));
-    }
-    NSString *(^path)(uint32_t) = ^NSString *(uint32_t off) {
-        NSMutableArray *parts = [NSMutableArray array];
-        for (int guard = 0; guard < 64 && dirs[@(off)].length; guard++) { [parts insertObject:dirs[@(off)] atIndex:0]; uint32_t p = parents[@(off)].unsignedIntValue; if (p == off) break; off = p; }
-        return [parts componentsJoinedByString:@"/"];
-    };
-    for (uint32_t k = 0, nf = U32(fileset); k < nf; k++) {
-        uint32_t o = fileset + U32(fileset + 4 + 4 * k), parent = U32(o), size = U32(o + 4), foff = U32(o + 8); uint16_t fmt = U16(o + 24), len = U16(o + 28);
-        NSString *name = [[NSString alloc] initWithBytes:d + o + 30 length:len encoding:NSISOLatin1StringEncoding];
-        if ([[NSString stringWithFormat:@"%@/%@", path(parent), name] caseInsensitiveCompare:want] != NSOrderedSame) continue;
-        uint32_t o2 = (o + 30 + len + 1 + 3) & ~3u;
-        if (fmt == 0) return dataoff + foff + size <= n ? [NSData dataWithBytes:d + dataoff + foff length:size] : nil;
-        uint32_t chunk = U32(o2 + 4); o2 += 8;
-        NSMutableData *out = [NSMutableData dataWithCapacity:size];
-        for (uint32_t c = 0; c < (size + chunk - 1) / chunk; c++) {
-            uint32_t usz = U32(o2 + 16 * c), csz = U32(o2 + 16 * c + 4), extra = U32(o2 + 16 * c + 8), coff = U32(o2 + 16 * c + 12);
-            const uint8_t *src = d + dataoff + foff + coff;
-            if (dataoff + foff + coff + csz + extra > n) return nil;
-            if (csz < usz) { NSMutableData *u = [NSMutableData dataWithLength:usz]; uLongf ul = usz;
-                if (uncompress(u.mutableBytes, &ul, src, csz) != Z_OK) return nil; u.length = ul; [out appendData:u]; }
-            else [out appendBytes:src length:usz];
-            if (extra) [out appendBytes:src + csz length:extra];
-        }
-        out.length = size; return out;
-    }
-    return nil;
-    #undef U32
-    #undef U16
-}
-/* a DDS texture (DXT-compressed or not) -> CGImage, through ImageIO */
-static CGImageRef dds_image(NSData *d)
-{
-    if (d.length < 128 || memcmp(d.bytes, "DDS ", 4)) return NULL;
-    CGImageSourceRef src = CGImageSourceCreateWithData((__bridge CFDataRef)d, NULL); if (!src) return NULL;
-    CGImageRef img = CGImageSourceCreateImageAtIndex(src, 0, NULL); CFRelease(src); return img;
-}
-static NSImage *nsimg(CGImageRef img, CGRect crop)
-{
-    if (!img) return nil;
-    CGImageRef c = CGRectIsEmpty(crop) ? CGImageRetain(img) : CGImageCreateWithImageInRect(img, crop);
-    NSImage *r = [[NSImage alloc] initWithCGImage:c size:NSZeroSize]; CGImageRelease(c); return r;
-}
-/* the part of an image with any opacity */
-static CGRect opaque_bounds(CGImageRef img)
-{
-    size_t w = CGImageGetWidth(img), h = CGImageGetHeight(img); uint8_t *px = calloc(w * h, 4);
-    CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB(); CGContextRef c = CGBitmapContextCreate(px, w, h, 8, w * 4, cs, (CGBitmapInfo)kCGImageAlphaPremultipliedLast);
-    CGContextDrawImage(c, CGRectMake(0, 0, w, h), img);
-    size_t x0 = w, y0 = h, x1 = 0, y1 = 0;
-    for (size_t y = 0; y < h; y++) for (size_t x = 0; x < w; x++) if (px[(y * w + x) * 4 + 3] > 8) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
-    CGContextRelease(c); CGColorSpaceRelease(cs); free(px);
-    return x1 >= x0 ? CGRectMake(x0, y0, x1 - x0 + 1, y1 - y0 + 1) : CGRectZero;   /* bitmap rows run top-down here */
-}
+#include "../runtime/edition.h"
 
 // ---------------------------------------------------------------- settings
-typedef struct { NSString *value, *label, *note; } Choice;
 @interface DSRow : NSObject
 @property NSString *title; @property NSArray<NSDictionary *> *choices; @property NSInteger index;
-@property (copy) void (^activate)(void);     /* a row that opens something instead of cycling (Mods) */
+@property (copy) void (^activate)(void);     /* a row that runs something instead of cycling (Updates) */
 @end
 @implementation DSRow @end
 
-static NSColor *gold(void) { return [NSColor colorWithSRGBRed:0.86 green:0.77 blue:0.55 alpha:1]; }
-static NSColor *parchment(void) { return [NSColor colorWithSRGBRed:0.94 green:0.91 blue:0.84 alpha:1]; }
-static NSColor *dim(void) { return [NSColor colorWithSRGBRed:0.66 green:0.61 blue:0.52 alpha:1]; }
-static NSFont *cp(CGFloat size, BOOL bold)
+#ifdef DF2_EDITION                                   /* Delta Force 2's amber menus, Delta Force's green ones */
+static NSColor *accent(void) { return [NSColor colorWithSRGBRed:0.98 green:0.72 blue:0.22 alpha:1]; }
+static NSColor *accent_dim(void) { return [NSColor colorWithSRGBRed:0.62 green:0.45 blue:0.16 alpha:1]; }
+#else
+static NSColor *accent(void) { return [NSColor colorWithSRGBRed:0.45 green:0.92 blue:0.36 alpha:1]; }
+static NSColor *accent_dim(void) { return [NSColor colorWithSRGBRed:0.27 green:0.55 blue:0.22 alpha:1]; }
+#endif
+static NSColor *text_c(void) { return [NSColor colorWithSRGBRed:0.93 green:0.93 blue:0.88 alpha:1]; }
+static NSColor *dim(void) { return [NSColor colorWithSRGBRed:0.66 green:0.66 blue:0.6 alpha:1]; }
+static NSFont *din(CGFloat size) { return [NSFont fontWithName:@"DINCondensed-Bold" size:size] ?: [NSFont systemFontOfSize:size weight:NSFontWeightBold]; }
+static NSFont *body(CGFloat size, BOOL bold)
 {
-    NSFont *f = [NSFont fontWithName:bold ? @"Copperplate-Bold" : @"Copperplate-Light" size:size] ?: [NSFont fontWithName:@"Copperplate" size:size];
-    return f ?: [NSFont systemFontOfSize:size weight:bold ? NSFontWeightSemibold : NSFontWeightRegular];
+    return [NSFont fontWithName:bold ? @"AvenirNextCondensed-DemiBold" : @"AvenirNextCondensed-Medium" size:size]
+        ?: [NSFont systemFontOfSize:size weight:bold ? NSFontWeightSemibold : NSFontWeightRegular];
 }
 
 // ---------------------------------------------------------------- the view
 @interface DSLaunchView : NSView
 @property NSArray<DSRow *> *rows; @property NSInteger focus; @property NSInteger hover; @property NSInteger pressed;
-@property NSImage *stone, *plaque, *trim, *wood, *woodHover, *woodDown, *logo; @property NSString *note;
+@property NSImage *backdrop, *logo; @property NSString *note;
 @property (copy) void (^onPlay)(void); @property (copy) void (^onQuit)(void); @property (copy) void (^onChange)(void);
 @end
 
@@ -112,11 +42,11 @@ enum { HIT_NONE = -1, HIT_PLAY = 100, HIT_QUIT = 101 };   /* rows: 10*row + 0 (l
 - (BOOL)isFlipped { return YES; }
 - (BOOL)acceptsFirstResponder { return YES; }
 - (BOOL)acceptsFirstMouse:(NSEvent *)e { return YES; }
-- (NSRect)rowRect:(NSInteger)k { return NSMakeRect(70, 196 + 74 * k, self.bounds.size.width - 140, 64); }
+- (NSRect)rowRect:(NSInteger)k { return NSMakeRect(70, 206 + 74 * k, self.bounds.size.width - 140, 64); }
 - (NSRect)arrow:(NSInteger)k right:(BOOL)right { NSRect r = [self rowRect:k]; return NSMakeRect(right ? NSMaxX(r) - 34 : NSMaxX(r) - 330, r.origin.y + 6, 30, 30); }
-- (NSRect)valueRect:(NSInteger)k { NSRect r = [self rowRect:k]; return NSMakeRect(NSMaxX(r) - 300, r.origin.y + 9, 262, 30); }
-- (NSRect)playRect { NSRect b = self.bounds; return NSMakeRect(NSMidX(b) + 12, b.size.height - 84, 220, 56); }
-- (NSRect)quitRect { NSRect b = self.bounds; return NSMakeRect(NSMidX(b) - 232, b.size.height - 84, 220, 56); }
+- (NSRect)valueRect:(NSInteger)k { NSRect r = [self rowRect:k]; return NSMakeRect(NSMaxX(r) - 300, r.origin.y + 7, 262, 30); }
+- (NSRect)playRect { NSRect b = self.bounds; return NSMakeRect(NSMidX(b) + 12, b.size.height - 80, 220, 52); }
+- (NSRect)quitRect { NSRect b = self.bounds; return NSMakeRect(NSMidX(b) - 232, b.size.height - 80, 220, 52); }
 - (NSInteger)hit:(NSPoint)p
 {
     if (NSPointInRect(p, self.playRect)) return HIT_PLAY;
@@ -142,7 +72,6 @@ enum { HIT_NONE = -1, HIT_PLAY = 100, HIT_QUIT = 101 };   /* rows: 10*row + 0 (l
     if (h == HIT_PLAY) { if (self.onPlay) self.onPlay(); return; }
     if (h == HIT_QUIT) { if (self.onQuit) self.onQuit(); return; }
     NSInteger k = h / 10; self.focus = k;
-    if (self.rows[k].activate) { self.rows[k].activate(); self.needsDisplay = YES; return; }
     [self step:k by:(h % 10 == 0) ? -1 : 1];
 }
 - (void)step:(NSInteger)k by:(NSInteger)dir
@@ -165,214 +94,151 @@ enum { HIT_NONE = -1, HIT_PLAY = 100, HIT_QUIT = 101 };   /* rows: 10*row + 0 (l
     }
     [super keyDown:e];
 }
-static void draw_text(NSString *s, NSFont *f, NSColor *c, NSRect r, NSTextAlignment al, NSShadow *sh)
+static void draw_text(NSString *s, NSFont *f, NSColor *c, NSRect r, NSTextAlignment al, NSShadow *sh, CGFloat kern)
 {
     NSMutableParagraphStyle *ps = [NSMutableParagraphStyle new]; ps.alignment = al; ps.lineBreakMode = NSLineBreakByTruncatingTail;
-    NSMutableDictionary *a = [@{NSFontAttributeName: f, NSForegroundColorAttributeName: c, NSParagraphStyleAttributeName: ps} mutableCopy];
+    NSMutableDictionary *a = [@{NSFontAttributeName: f, NSForegroundColorAttributeName: c, NSParagraphStyleAttributeName: ps, NSKernAttributeName: @(kern)} mutableCopy];
     if (sh) a[NSShadowAttributeName] = sh;
     [s drawInRect:r withAttributes:a];
 }
-- (void)drawTitle:(NSRect)r
+/* corner brackets, like the targeting marks of the game's HUD */
+static void brackets(NSRect r, CGFloat len, CGFloat w, NSColor *c)
 {
-    /* "DUNGEON SIEGE" in the logo's manner: brushed silver letters, a copper rim, a dark drop shadow */
-    NSString *t = @"DUNGEON SIEGE II"; NSFont *f = cp(42, YES);
-    NSDictionary *at = @{NSFontAttributeName: f, NSKernAttributeName: @3};
-    NSSize sz = [t sizeWithAttributes:at]; NSPoint o = NSMakePoint(NSMidX(r) - sz.width / 2, NSMidY(r) - sz.height / 2 - 2);
-    NSShadow *sh = [NSShadow new]; sh.shadowColor = [NSColor colorWithWhite:0 alpha:0.85]; sh.shadowOffset = NSMakeSize(0, -3); sh.shadowBlurRadius = 5;
-    NSMutableDictionary *rim = [at mutableCopy]; rim[NSStrokeColorAttributeName] = [NSColor colorWithSRGBRed:0.62 green:0.33 blue:0.16 alpha:1]; rim[NSStrokeWidthAttributeName] = @(9); rim[NSShadowAttributeName] = sh;
-    rim[NSForegroundColorAttributeName] = [NSColor colorWithSRGBRed:0.62 green:0.33 blue:0.16 alpha:1];
-    [t drawAtPoint:o withAttributes:rim];
-    /* silver fill: the glyphs as a clip, a vertical gradient through it */
-    NSImage *mask = [NSImage imageWithSize:sz flipped:NO drawingHandler:^BOOL(NSRect dst) {
-        NSMutableDictionary *m = [at mutableCopy]; m[NSForegroundColorAttributeName] = NSColor.whiteColor; [t drawAtPoint:NSZeroPoint withAttributes:m];
-        NSGradient *g = [[NSGradient alloc] initWithColorsAndLocations:[NSColor colorWithWhite:0.98 alpha:1], 0.0, [NSColor colorWithWhite:0.72 alpha:1], 0.45,
-                         [NSColor colorWithWhite:0.42 alpha:1], 0.5, [NSColor colorWithWhite:0.86 alpha:1], 0.8, [NSColor colorWithWhite:0.6 alpha:1], 1.0, nil];
-        [[NSGraphicsContext currentContext] setCompositingOperation:NSCompositingOperationSourceIn];
-        [g drawInRect:dst angle:90];
-        return YES;
-    }];
-    [mask drawInRect:NSMakeRect(o.x, o.y, sz.width, sz.height) fromRect:NSZeroRect operation:NSCompositingOperationSourceOver fraction:1 respectFlipped:YES hints:nil];
+    [c setStroke]; NSBezierPath *p = [NSBezierPath bezierPath]; p.lineWidth = w; p.lineCapStyle = NSLineCapStyleSquare;
+    CGFloat x0 = r.origin.x, y0 = r.origin.y, x1 = NSMaxX(r), y1 = NSMaxY(r);
+    [p moveToPoint:NSMakePoint(x0, y0 + len)]; [p lineToPoint:NSMakePoint(x0, y0)]; [p lineToPoint:NSMakePoint(x0 + len, y0)];
+    [p moveToPoint:NSMakePoint(x1 - len, y0)]; [p lineToPoint:NSMakePoint(x1, y0)]; [p lineToPoint:NSMakePoint(x1, y0 + len)];
+    [p moveToPoint:NSMakePoint(x1, y1 - len)]; [p lineToPoint:NSMakePoint(x1, y1)]; [p lineToPoint:NSMakePoint(x1 - len, y1)];
+    [p moveToPoint:NSMakePoint(x0 + len, y1)]; [p lineToPoint:NSMakePoint(x0, y1)]; [p lineToPoint:NSMakePoint(x0, y1 - len)];
+    [p stroke];
 }
 - (void)drawButton:(NSRect)r title:(NSString *)title code:(NSInteger)code primary:(BOOL)primary
 {
-    NSImage *img = self.pressed == code ? (self.woodDown ?: self.wood) : self.hover == code ? (self.woodHover ?: self.wood) : self.wood;
-    if (img) [img drawInRect:r fromRect:NSZeroRect operation:NSCompositingOperationSourceOver fraction:1 respectFlipped:YES hints:@{NSImageHintInterpolation: @(NSImageInterpolationHigh)}];
-    else { [[NSColor colorWithSRGBRed:0.36 green:0.22 blue:0.12 alpha:1] setFill]; [[NSBezierPath bezierPathWithRoundedRect:r xRadius:6 yRadius:6] fill]; }
+    BOOL hot = self.hover == code, down = self.pressed == code;
+    NSColor *fill = down ? [accent() colorWithAlphaComponent:0.45] : hot ? [accent() colorWithAlphaComponent:0.28] : primary ? [accent_dim() colorWithAlphaComponent:0.35] : [NSColor colorWithWhite:0 alpha:0.55];
+    [fill setFill]; NSRectFillUsingOperation(r, NSCompositingOperationSourceOver);
+    [(primary || hot ? accent() : accent_dim()) setStroke]; NSBezierPath *b = [NSBezierPath bezierPathWithRect:NSInsetRect(r, 0.5, 0.5)]; b.lineWidth = 1; [b stroke];
+    brackets(NSInsetRect(r, -4, -4), 10, 2, primary || hot ? accent() : accent_dim());
     NSShadow *sh = [NSShadow new]; sh.shadowColor = [NSColor colorWithWhite:0 alpha:0.9]; sh.shadowOffset = NSMakeSize(0, -1.5); sh.shadowBlurRadius = 2;
-    NSColor *c = self.hover == code ? [NSColor colorWithSRGBRed:1 green:0.93 blue:0.72 alpha:1] : primary ? gold() : parchment();
-    draw_text(title, cp(primary ? 24 : 20, YES), c, NSMakeRect(r.origin.x, NSMidY(r) - (primary ? 15 : 13), r.size.width, 32), NSTextAlignmentCenter, sh);
+    draw_text(title, din(primary ? 30 : 26), hot || primary ? NSColor.whiteColor : text_c(), NSMakeRect(r.origin.x, NSMidY(r) - (primary ? 14 : 12), r.size.width, 34), NSTextAlignmentCenter, sh, 4);
 }
 - (void)drawArrow:(NSRect)r right:(BOOL)right lit:(BOOL)lit
 {
-    NSBezierPath *p = [NSBezierPath bezierPath]; CGFloat x0 = r.origin.x + 7, x1 = NSMaxX(r) - 7, y0 = r.origin.y + 6, y1 = NSMaxY(r) - 6, ym = NSMidY(r);
+    NSBezierPath *p = [NSBezierPath bezierPath]; CGFloat x0 = r.origin.x + 9, x1 = NSMaxX(r) - 9, y0 = r.origin.y + 7, y1 = NSMaxY(r) - 7, ym = NSMidY(r);
     if (right) { [p moveToPoint:NSMakePoint(x0, y0)]; [p lineToPoint:NSMakePoint(x1, ym)]; [p lineToPoint:NSMakePoint(x0, y1)]; }
     else { [p moveToPoint:NSMakePoint(x1, y0)]; [p lineToPoint:NSMakePoint(x0, ym)]; [p lineToPoint:NSMakePoint(x1, y1)]; }
-    [p closePath];
-    NSGradient *g = [[NSGradient alloc] initWithStartingColor:[NSColor colorWithWhite:lit ? 1.0 : 0.88 alpha:1] endingColor:[NSColor colorWithWhite:lit ? 0.7 : 0.45 alpha:1]];
-    [g drawInBezierPath:p angle:90];
-    [[NSColor colorWithSRGBRed:0.55 green:0.3 blue:0.14 alpha:1] setStroke]; p.lineWidth = 1.5; [p stroke];
-}
-/* a riveted iron band around a plaque, like the frames of the game's menus */
-- (void)drawIronFrame:(NSRect)r
-{
-    NSBezierPath *outer = [NSBezierPath bezierPathWithRect:NSInsetRect(r, 3, 3)];
-    outer.lineWidth = 7; [[NSColor colorWithWhite:0.08 alpha:1] setStroke]; [outer stroke];
-    outer.lineWidth = 5; [[NSColor colorWithSRGBRed:0.45 green:0.46 blue:0.47 alpha:1] setStroke]; [outer stroke];
-    NSBezierPath *hi = [NSBezierPath bezierPathWithRect:NSInsetRect(r, 1.5, 1.5)]; hi.lineWidth = 1; [[NSColor colorWithWhite:0.78 alpha:0.8] setStroke]; [hi stroke];
-    NSBezierPath *lo = [NSBezierPath bezierPathWithRect:NSInsetRect(r, 6, 6)]; lo.lineWidth = 1.2; [[NSColor colorWithWhite:0.05 alpha:0.9] setStroke]; [lo stroke];
-    void (^rivet)(CGFloat, CGFloat) = ^(CGFloat x, CGFloat y) {
-        NSRect d = NSMakeRect(x - 4, y - 4, 8, 8);
-        NSGradient *g = [[NSGradient alloc] initWithColorsAndLocations:[NSColor colorWithSRGBRed:0.98 green:0.86 blue:0.55 alpha:1], 0.0,
-                         [NSColor colorWithSRGBRed:0.62 green:0.42 blue:0.16 alpha:1], 0.6, [NSColor colorWithSRGBRed:0.25 green:0.15 blue:0.05 alpha:1], 1.0, nil];
-        [g drawInBezierPath:[NSBezierPath bezierPathWithOvalInRect:d] relativeCenterPosition:NSMakePoint(-0.35, 0.35)];
-    };
-    for (CGFloat x = r.origin.x + 14; x <= NSMaxX(r) - 13; x += (r.size.width - 28) / 8) { rivet(x, r.origin.y + 3.5); rivet(x, NSMaxY(r) - 3.5); }
-    rivet(r.origin.x + 3.5, NSMidY(r)); rivet(NSMaxX(r) - 3.5, NSMidY(r));
+    [p closePath]; [(lit ? NSColor.whiteColor : accent()) setFill]; [p fill];
 }
 - (void)drawRect:(NSRect)dirty
 {
     NSRect b = self.bounds;
-    /* stone wall */
-    if (self.stone) {                                   /* filling the window, the aspect kept (cropped at the sides) */
-        CGFloat sc = MAX(b.size.width / self.stone.size.width, b.size.height / self.stone.size.height), w = self.stone.size.width * sc, h = self.stone.size.height * sc;
-        [self.stone drawInRect:NSMakeRect(NSMidX(b) - w / 2, NSMidY(b) - h / 2, w, h) fromRect:NSZeroRect operation:NSCompositingOperationCopy fraction:1 respectFlipped:YES hints:@{NSImageHintInterpolation: @(NSImageInterpolationHigh)}];
+    [[NSColor colorWithWhite:0.04 alpha:1] setFill]; NSRectFill(b);
+    if (self.backdrop) {                                /* filling the window, the aspect kept (cropped at the sides) */
+        CGFloat sc = MAX(b.size.width / self.backdrop.size.width, b.size.height / self.backdrop.size.height), w = self.backdrop.size.width * sc, h = self.backdrop.size.height * sc;
+        [self.backdrop drawInRect:NSMakeRect(NSMidX(b) - w / 2, NSMidY(b) - h / 2, w, h) fromRect:NSZeroRect operation:NSCompositingOperationSourceOver fraction:1 respectFlipped:YES hints:@{NSImageHintInterpolation: @(NSImageInterpolationHigh)}];
     }
-    else { [[NSColor colorWithSRGBRed:0.16 green:0.03 blue:0.02 alpha:1] setFill]; NSRectFill(b); }
-    NSGradient *vig = [[NSGradient alloc] initWithColorsAndLocations:[NSColor colorWithWhite:0 alpha:0.15], 0.0, [NSColor colorWithWhite:0 alpha:0.62], 1.0, nil];
-    [vig drawInRect:b relativeCenterPosition:NSMakePoint(0, 0.1)];
-    /* title plaque */
-    NSRect pr = NSMakeRect(NSMidX(b) - 290, 22, 580, 128);
-    if (self.logo) [self.logo drawInRect:NSMakeRect(NSMidX(b) - 210, 8, 420, 420 * self.logo.size.height / self.logo.size.width) fromRect:NSZeroRect operation:NSCompositingOperationSourceOver fraction:1 respectFlipped:YES hints:@{NSImageHintInterpolation: @(NSImageInterpolationHigh)}];
-    else {
-        [[NSColor colorWithSRGBRed:0.42 green:0.25 blue:0.15 alpha:1] setFill]; NSRectFill(NSInsetRect(pr, 6, 6));
-        [self drawIronFrame:pr];
-        [self drawTitle:NSMakeRect(pr.origin.x, pr.origin.y + 6, pr.size.width, pr.size.height - 30)];
+    NSGradient *vig = [[NSGradient alloc] initWithColorsAndLocations:[NSColor colorWithWhite:0 alpha:0.2], 0.0, [NSColor colorWithWhite:0 alpha:0.72], 1.0, nil];
+    [vig drawInRect:b relativeCenterPosition:NSMakePoint(0, 0.2)];
+    NSShadow *sh = [NSShadow new]; sh.shadowColor = [NSColor colorWithWhite:0 alpha:0.9]; sh.shadowOffset = NSMakeSize(0, -1); sh.shadowBlurRadius = 3;
+    /* the logo, or the title written out */
+    if (self.logo) {
+        CGFloat h = 144, w = h * self.logo.size.width / self.logo.size.height; if (w > 440) { w = 440; h = w * self.logo.size.height / self.logo.size.width; }
+        NSShadow *glow = [NSShadow new]; glow.shadowColor = [NSColor colorWithWhite:0 alpha:0.85]; glow.shadowOffset = NSZeroSize; glow.shadowBlurRadius = 14;
+        [NSGraphicsContext saveGraphicsState]; [glow set];
+        [self.logo drawInRect:NSMakeRect(NSMidX(b) - w / 2, 12 + (144 - h) / 2, w, h) fromRect:NSZeroRect operation:NSCompositingOperationSourceOver fraction:1 respectFlipped:YES hints:@{NSImageHintInterpolation: @(NSImageInterpolationHigh)}];
+        [NSGraphicsContext restoreGraphicsState];
     }
-    NSShadow *sh = [NSShadow new]; sh.shadowColor = [NSColor colorWithWhite:0 alpha:0.9]; sh.shadowOffset = NSMakeSize(0, -1); sh.shadowBlurRadius = 2;
-    draw_text(@"NATIVE EDITION FOR macOS", cp(13, NO), gold(), NSMakeRect(pr.origin.x, NSMaxY(pr) - 34, pr.size.width, 18), NSTextAlignmentCenter, sh);
+    else draw_text(@DS2_TITLE.uppercaseString, din(72), NSColor.whiteColor, NSMakeRect(0, 52, b.size.width, 84), NSTextAlignmentCenter, sh, 8);
+    draw_text(@"NATIVE EDITION FOR macOS", din(17), accent(), NSMakeRect(0, 164, b.size.width, 22), NSTextAlignmentCenter, sh, 5);
     /* the settings */
-    NSRect panel = NSMakeRect(54, 176, b.size.width - 108, 74 * self.rows.count + 30);
-    [[NSColor colorWithWhite:0 alpha:0.5] setFill]; [[NSBezierPath bezierPathWithRoundedRect:panel xRadius:4 yRadius:4] fill];
-    [[NSColor colorWithSRGBRed:0.55 green:0.38 blue:0.2 alpha:0.9] setStroke]; NSBezierPath *bp = [NSBezierPath bezierPathWithRoundedRect:NSInsetRect(panel, 0.5, 0.5) xRadius:4 yRadius:4]; bp.lineWidth = 1.5; [bp stroke];
+    NSRect panel = NSMakeRect(54, 194, b.size.width - 108, 74 * self.rows.count + 14);
+    [[NSColor colorWithWhite:0 alpha:0.62] setFill]; NSRectFillUsingOperation(panel, NSCompositingOperationSourceOver);
+    [[accent_dim() colorWithAlphaComponent:0.8] setStroke]; NSBezierPath *bp = [NSBezierPath bezierPathWithRect:NSInsetRect(panel, 0.5, 0.5)]; bp.lineWidth = 1; [bp stroke];
+    brackets(NSInsetRect(panel, -5, -5), 18, 2.5, accent());
     for (NSInteger k = 0; k < (NSInteger)self.rows.count; k++) {
         DSRow *row = self.rows[k]; NSRect r = [self rowRect:k]; NSDictionary *ch = row.choices[row.index];
-        if (k == self.focus) { [[NSColor colorWithSRGBRed:0.86 green:0.6 blue:0.25 alpha:0.12] setFill]; [[NSBezierPath bezierPathWithRoundedRect:NSInsetRect(r, -10, -2) xRadius:3 yRadius:3] fill]; }
-        draw_text(row.title.uppercaseString, cp(19, YES), gold(), NSMakeRect(r.origin.x, r.origin.y + 8, 260, 28), NSTextAlignmentLeft, sh);
+        if (k == self.focus) { [[accent() colorWithAlphaComponent:0.12] setFill]; NSRectFillUsingOperation(NSInsetRect(r, -10, -2), NSCompositingOperationSourceOver); [accent() setFill]; NSRectFill(NSMakeRect(r.origin.x - 10, r.origin.y - 2, 3, r.size.height + 4)); }
+        draw_text(row.title.uppercaseString, din(24), accent(), NSMakeRect(r.origin.x + 4, r.origin.y + 10, 260, 30), NSTextAlignmentLeft, sh, 2);
         [self drawArrow:[self arrow:k right:NO] right:NO lit:self.hover == 10 * k];
         [self drawArrow:[self arrow:k right:YES] right:YES lit:self.hover == 10 * k + 2];
-        draw_text(ch[@"label"], cp(18, NO), self.hover == 10 * k + 1 ? NSColor.whiteColor : parchment(), [self valueRect:k], NSTextAlignmentCenter, sh);
-        draw_text(ch[@"note"] ?: @"", cp(11, NO), dim(), NSMakeRect(NSMaxX(r) - 330, r.origin.y + 42, 330, 18), NSTextAlignmentCenter, nil);
-        if (k + 1 < (NSInteger)self.rows.count) { [[NSColor colorWithSRGBRed:0.55 green:0.38 blue:0.2 alpha:0.35] setFill]; NSRectFill(NSMakeRect(r.origin.x, NSMaxY(r) + 5, r.size.width, 1)); }
+        draw_text(ch[@"label"], body(20, YES), self.hover == 10 * k + 1 ? NSColor.whiteColor : text_c(), [self valueRect:k], NSTextAlignmentCenter, sh, 0.5);
+        draw_text(ch[@"note"] ?: @"", body(12.5, NO), dim(), NSMakeRect(NSMaxX(r) - 340, r.origin.y + 40, 350, 18), NSTextAlignmentCenter, nil, 0);
+        if (k + 1 < (NSInteger)self.rows.count) { [[accent_dim() colorWithAlphaComponent:0.35] setFill]; NSRectFillUsingOperation(NSMakeRect(r.origin.x, NSMaxY(r) + 5, r.size.width, 1), NSCompositingOperationSourceOver); }
     }
-    if (self.note.length) draw_text(self.note, cp(11, NO), dim(), NSMakeRect(54, NSMaxY(panel) + 10, b.size.width - 108, 30), NSTextAlignmentCenter, nil);
+    if (self.note.length) draw_text(self.note, body(12.5, NO), dim(), NSMakeRect(54, NSMaxY(panel) + 8, b.size.width - 108, 34), NSTextAlignmentCenter, sh, 0);
     [self drawButton:self.quitRect title:@"QUIT" code:HIT_QUIT primary:NO];
     [self drawButton:self.playRect title:@"PLAY" code:HIT_PLAY primary:YES];
 }
 @end
 
 // ---------------------------------------------------------------- choices, settings file, the window
-static NSArray<NSDictionary *> *resolution_choices(void)
+static NSArray<NSDictionary *> *shape_choices(void)
 {
-    NSScreen *s = NSScreen.mainScreen; int W = (int)s.frame.size.width, H = (int)s.frame.size.height; double sc = s.backingScaleFactor;
-    NSMutableArray *a = [NSMutableArray array]; NSMutableSet *seen = [NSMutableSet set];
-    void (^add)(int, int, NSString *) = ^(int w, int h, NSString *note) {
-        NSString *v = [NSString stringWithFormat:@"%dx%d", w, h]; if ([seen containsObject:v]) return; [seen addObject:v];
-        [a addObject:@{@"value": v, @"label": [NSString stringWithFormat:@"%d × %d", w, h], @"note": note}];
-    };
-    add(W, H, @"This display (recommended)");
-    if (sc > 1.01) add((int)(W * sc + 0.5), (int)(H * sc + 0.5), @"Full Retina detail; the interface is drawn very small");
-    static const int std[][2] = {{2560,1600},{2560,1440},{1920,1200},{1920,1080},{1680,1050},{1600,900},{1440,900},{1366,768},{1280,800},{1280,720},{1024,768},{800,600}};
-    for (size_t k = 0; k < sizeof std / sizeof *std; k++) if (std[k][0] <= W && std[k][1] <= H) add(std[k][0], std[k][1], @"Scaled to fill the screen");
-    return a;
-}
-static NSArray<NSDictionary *> *distance_choices(void)
-{
-    return @[@{@"value": @"100", @"label": @"Original", @"note": @"As the game shipped"},
-             @{@"value": @"125", @"label": @"Far", @"note": @"125% of the original"},
-             @{@"value": @"150", @"label": @"Farther", @"note": @"150%, like the SeeFar mods"},
-             @{@"value": @"200", @"label": @"Very Far", @"note": @"200% of the original"},
-             @{@"value": @"250", @"label": @"Horizon", @"note": @"250%; heavier in large outdoor areas"},
-             @{@"value": @"300", @"label": @"Maximum", @"note": @"300%; may slow down in the biggest vistas"}];
+    NSSize s = NSScreen.mainScreen.frame.size; int W = (int)(768 * s.width / MAX(s.height, 1) / 16 + 0.5) * 16; if (W > 2048) W = 2048;
+    NSString *wide = W > 1024 ? [NSString stringWithFormat:@"1024 × 768 in the game plays at %d × 768; wider view", W] : @"This display is 4:3 already";
+    return @[@{@"value": @"screen", @"label": @"This Display", @"note": wide},
+             @{@"value": @"off", @"label": @"Original 4:3", @"note": @"Black bars at the sides, as the game shipped"}];
 }
 static NSArray<NSDictionary *> *framerate_choices(void)
 {
     NSInteger hz = NSScreen.mainScreen.maximumFramesPerSecond; if (hz <= 0) hz = 60;
-    NSMutableArray *a = [NSMutableArray arrayWithObject:@{@"value": @"auto", @"label": @"Automatic",
-        @"note": hz >= 120 ? @"Smooth 120 fps, 60 fps in the heaviest scenes" : @"Matches the display"}];
-    if (hz >= 120) [a addObject:@{@"value": @"120", @"label": @"120 FPS", @"note": @"Locked to 120"}];
-    [a addObject:@{@"value": @"60", @"label": @"60 FPS", @"note": @"Locked to 60; cooler and quieter"}];
-    [a addObject:@{@"value": @"30", @"label": @"30 FPS", @"note": @"Saves battery"}];
-    [a addObject:@{@"value": @"unlimited", @"label": @"Unlimited", @"note": @"No cap and no vertical sync (may tear)"}];
+    NSMutableArray *a = [NSMutableArray arrayWithObject:@{@"value": @"display", @"label": [NSString stringWithFormat:@"Display (%ld FPS)", (long)hz],
+        @"note": @"Smooth motion between the game's 62.5 ticks a second"}];
+    if (hz > 60) [a addObject:@{@"value": @"60", @"label": @"60 FPS", @"note": @"Smooth motion, capped at 60; cooler and quieter"}];
+    [a addObject:@{@"value": @"original", @"label": @"Original", @"note": @"The game's own pacing, as it shipped"}];
     return a;
 }
-/* ---- the CD key for online play ----
- * The game presents a "DoubleHash" of the player's product key to the GameSpy (now OpenSpy) lobby. The retail
- * installer derived it from the key; digital releases never ran that installer. As its Setup.exe does: the 25
- * characters read as a base-24 number over BCDFGHJKMPQRTVWXY2346789 into 15 little-endian bytes, SHA-1 of those,
- * SHA-1 of the digest, the first 8 bytes. Only the hash is stored (<data>/cdkey-hash.txt; the runtime puts it in the
- * registry, registry.c), never the key. Same computation as install.sh --cd-key. */
-static BOOL cdkey_hash(NSString *key, uint8_t out[8])
+static NSArray<NSDictionary *> *novaworld_choices(void)
 {
-    static const char A[] = "BCDFGHJKMPQRTVWXY2346789";
-    NSString *k = [[[key uppercaseString] stringByReplacingOccurrencesOfString:@"-" withString:@""] stringByReplacingOccurrencesOfString:@" " withString:@""];
-    if (k.length != 25) return NO;
-    uint8_t buf[15] = {0}; int top = 0;
-    for (NSUInteger i = 0; i < 25; i++) {
-        unichar ch = [k characterAtIndex:i]; const char *p = ch < 128 ? strchr(A, (char)ch) : NULL;
-        if (!p || !ch) return NO;
-        unsigned c = (unsigned)(p - A);
-        for (int j = 0; j <= top; j++) { unsigned v = buf[j] * 24u + c; buf[j] = (uint8_t)v; c = v >> 8; }
-        if (c) { if (top + 1 >= 15) return NO; buf[++top] = (uint8_t)c; }
-    }
-    uint8_t d1[CC_SHA1_DIGEST_LENGTH], d2[CC_SHA1_DIGEST_LENGTH];
-    CC_SHA1(buf, sizeof buf, d1); CC_SHA1(d1, sizeof d1, d2);
-    memcpy(out, d2, 8); return YES;
+    return @[@{@"value": @"on", @"label": @"Public Game List", @"note": @"NovaWorld finds games through the BitTorrent DHT"},
+             @{@"value": @"off", @"label": @"LAN and Addresses", @"note": @"No public list; join by address or on your network"}];
 }
-static NSString *cdkey_path(NSString *data) { return [data stringByAppendingPathComponent:@"cdkey-hash.txt"]; }
-static BOOL cdkey_present(NSString *data) { return [NSFileManager.defaultManager fileExistsAtPath:cdkey_path(data)]; }
-static NSArray<NSDictionary *> *cdkey_choice(NSString *data)
+static NSArray<NSDictionary *> *router_choices(void)
 {
-    return cdkey_present(data) ? @[@{@"value": @"set", @"label": @"CD Key Entered", @"note": @"Online play ready · press to change it"}]
-                               : @[@{@"value": @"none", @"label": @"No CD Key", @"note": @"Needed for online play · press to enter your own"}];
-}
-/* the entry box; returns YES when the stored key changed */
-static BOOL cdkey_panel(NSString *data)
-{
-    for (NSString *problem = nil;;) {
-        NSAlert *a = [NSAlert new];
-        a.messageText = problem ?: @"Your Dungeon Siege II CD Key";
-        a.informativeText = @"The 25-character product key of your own original retail copy (the sticker under disc 1 in the box), for online play. "
-                             "The Steam and GOG releases come without one. "
-                             "Each copy needs its own key: the same key can't be online twice at once. Only a hash of it is kept on this Mac.";
-        NSSecureTextField *f = [[NSSecureTextField alloc] initWithFrame:NSMakeRect(0, 0, 320, 24)];
-        f.placeholderString = @"XXXXX-XXXXX-XXXXX-XXXXX-XXXXX"; a.accessoryView = f;
-        [a addButtonWithTitle:@"Save"]; [a addButtonWithTitle:@"Cancel"];
-        BOOL had = cdkey_present(data); if (had) [a addButtonWithTitle:@"Remove Key"];
-        a.window.initialFirstResponder = f;
-        NSModalResponse r = [a runModal];
-        if (r == NSAlertSecondButtonReturn) return NO;
-        if (r == NSAlertThirdButtonReturn) { [NSFileManager.defaultManager removeItemAtPath:cdkey_path(data) error:nil]; return YES; }
-        uint8_t h[8];
-        if (!cdkey_hash(f.stringValue, h)) { problem = @"That isn't a product key: it has 25 letters and digits (no vowels, 0, 1 or 5)."; continue; }
-        NSMutableString *hex = [NSMutableString string]; for (int i = 0; i < 8; i++) [hex appendFormat:@"%02x", h[i]];
-        [NSFileManager.defaultManager createDirectoryAtPath:data withIntermediateDirectories:YES attributes:nil error:nil];
-        [[hex stringByAppendingString:@"\n"] writeToFile:cdkey_path(data) atomically:YES encoding:NSASCIIStringEncoding error:nil];
-        [NSFileManager.defaultManager setAttributes:@{NSFilePosixPermissions: @0600} ofItemAtPath:cdkey_path(data) error:nil];
-        return YES;
-    }
+    return @[@{@"value": @"on", @"label": @"Open Port When Hosting", @"note": @"Asks your router (UPnP / NAT-PMP); closed on exit"},
+             @{@"value": @"off", @"label": @"Leave Router Alone", @"note": @"Forward UDP 3568 yourself to host online"}];
 }
 static NSInteger index_of(NSArray<NSDictionary *> *c, NSString *v, NSInteger dflt)
 {
     for (NSUInteger k = 0; k < c.count; k++) if ([c[k][@"value"] isEqualToString:v ?: @""]) return (NSInteger)k;
     return dflt;
 }
-/* the chosen settings as environment for the runtime (read later at start-up) */
-static void apply(NSString *res, NSString *dist, NSString *fps)
+/* the chosen settings as environment for the runtime (each read later, after start-up: df_res.c, ddraw.c, df_frame.c,
+ * df_net.c, portmap.c). An environment already set by the player (a terminal) wins. */
+static void apply(NSString *shape, NSString *fps, NSString *nova, NSString *router)
 {
-    setenv("DS_RESOLUTION", res.UTF8String, 1);
-    setenv("DS_DRAW_DISTANCE", dist.UTF8String, 1);
-    if ([fps isEqualToString:@"unlimited"]) { setenv("DSR_FPSCAP", "0", 1); setenv("DSR_VSYNC", "0", 1); }
-    else setenv("DSR_FPSCAP", fps.UTF8String, 1);
+    if (!getenv("DF_RES") && [shape isEqualToString:@"off"]) setenv("DF_RES", "off", 1);
+    if (!getenv("DSR_FPSCAP") && !getenv("DF_HIGH_FPS")) {
+        if ([fps isEqualToString:@"original"]) setenv("DF_HIGH_FPS", "0", 1);
+        else if ([fps isEqualToString:@"60"]) setenv("DSR_FPSCAP", "60", 1);
+    }
+    if (!getenv("DF_NO_P2P") && [nova isEqualToString:@"off"]) setenv("DF_NO_P2P", "1", 1);
+    if (!getenv("DS_NO_PORTMAP") && [router isEqualToString:@"off"]) setenv("DS_NO_PORTMAP", "1", 1);
+}
+/* the art: <data>/art, else the copy in the app (Resources/art) */
+static NSImage *art(NSString *data, NSString *name)
+{
+    NSMutableArray *dirs = [NSMutableArray arrayWithObject:[data stringByAppendingPathComponent:@"art"]];
+    if (NSBundle.mainBundle.resourcePath) [dirs addObject:[NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"art"]];
+    for (NSString *d in dirs) for (NSString *ext in @[@"png", @"jpg"]) {
+        NSImage *i = [[NSImage alloc] initWithContentsOfFile:[[d stringByAppendingPathComponent:name] stringByAppendingPathExtension:ext]];
+        if (i.size.width > 16) return i;
+    }
+    return nil;
+}
+/* the part of an image with any opacity (Steam's logos come with empty margins) */
+static NSImage *trimmed(NSImage *img)
+{
+    CGImageRef c = [img CGImageForProposedRect:NULL context:nil hints:nil]; if (!c) return img;
+    size_t w = CGImageGetWidth(c), h = CGImageGetHeight(c); uint8_t *px = calloc(w * h, 4);
+    CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB(); CGContextRef g = CGBitmapContextCreate(px, w, h, 8, w * 4, cs, (CGBitmapInfo)kCGImageAlphaPremultipliedLast);
+    CGContextDrawImage(g, CGRectMake(0, 0, w, h), c);
+    size_t x0 = w, y0 = h, x1 = 0, y1 = 0;
+    for (size_t y = 0; y < h; y++) for (size_t x = 0; x < w; x++) if (px[(y * w + x) * 4 + 3] > 8) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+    CGContextRelease(g); CGColorSpaceRelease(cs); free(px);
+    if (x1 < x0) return img;
+    CGImageRef t = CGImageCreateWithImageInRect(c, CGRectMake(x0, y0, x1 - x0 + 1, y1 - y0 + 1));   /* bitmap rows run top-down here */
+    NSImage *r = [[NSImage alloc] initWithCGImage:t size:NSZeroSize]; CGImageRelease(t); return r;
 }
 @interface DSBlockTarget : NSObject      /* a button action as a block */
 @property (copy) void (^fire)(NSInteger tag);
@@ -484,15 +350,18 @@ static BOOL update_run(NSWindow *parent, NSString *updater, NSString *branch, NS
  * to an image instead (development). */
 int ds_launcher_run(const char *game_dir, const char *data_dir)
 {
+    (void)game_dir;
     NSString *data = @(data_dir), *plistPath = [data stringByAppendingPathComponent:@"launcher.plist"];
     NSDictionary *saved = [NSDictionary dictionaryWithContentsOfFile:plistPath] ?: @{};
-    DSRow *res = [DSRow new], *dist = [DSRow new], *fps = [DSRow new];
-    res.title = @"Resolution"; res.choices = resolution_choices(); res.index = index_of(res.choices, saved[@"resolution"], 0);
-    dist.title = @"View Distance"; dist.choices = distance_choices(); dist.index = index_of(dist.choices, saved[@"viewDistance"], 0);
+    DSRow *shape = [DSRow new], *fps = [DSRow new], *nova = [DSRow new], *router = [DSRow new];
+    shape.title = @"Screen Shape"; shape.choices = shape_choices(); shape.index = index_of(shape.choices, saved[@"screenShape"], 0);
     fps.title = @"Frame Rate"; fps.choices = framerate_choices(); fps.index = index_of(fps.choices, saved[@"frameRate"], 0);
+    nova.title = @"NovaWorld"; nova.choices = novaworld_choices(); nova.index = index_of(nova.choices, saved[@"novaWorld"], 0);
+    router.title = @"Router"; router.choices = router_choices(); router.index = index_of(router.choices, saved[@"router"], 0);
+    NSString *(^val)(DSRow *) = ^NSString *(DSRow *r) { return r.choices[r.index][@"value"]; };
     const char *shot = getenv("DS_LAUNCHER_SHOT");
     if (getenv("DS_NO_LAUNCHER") && !shot) {
-        if (saved.count) apply(res.choices[res.index][@"value"], dist.choices[dist.index][@"value"], fps.choices[fps.index][@"value"]);
+        if (saved.count) apply(val(shape), val(fps), val(nova), val(router));
         return 1;
     }
 
@@ -503,12 +372,10 @@ int ds_launcher_run(const char *game_dir, const char *data_dir)
     __block int ustate = updater ? UPD_CHECKING : UPD_NONE; __block NSString *latest = nil;
     upd.choices = update_choice(ustate, branch, built, nil);
     BOOL shotMode = shot != NULL;
-    DSRow *online = [DSRow new]; online.title = @"Online"; online.choices = cdkey_choice(data);
-    __weak DSRow *wo = online;
-    online.activate = ^{ if (cdkey_panel(data)) wo.choices = cdkey_choice(data); };
-    NSArray<DSRow *> *rows = @[res, dist, fps, online, upd];
-    DSLaunchView *v = [[DSLaunchView alloc] initWithFrame:NSMakeRect(0, 0, 780, 700 + 74 * (NSInteger)(rows.count - 5))];
+    NSArray<DSRow *> *rows = @[shape, fps, nova, router, upd];
+    DSLaunchView *v = [[DSLaunchView alloc] initWithFrame:NSMakeRect(0, 0, 780, 720)];
     v.rows = rows; v.hover = v.pressed = HIT_NONE;
+    v.note = @"Renderer (Colors: Hardware, 16 Million, 256) and resolution: in the game's own Options. Join by address under Internet.";
     __weak DSLaunchView *wv = v; __weak DSRow *wu = upd;
     void (^check)(void) = ^{
         if (!updater) return;
@@ -527,7 +394,7 @@ int ds_launcher_run(const char *game_dir, const char *data_dir)
         NSAlert *a = [NSAlert new];
         a.messageText = [NSString stringWithFormat:@"Update to the newest %@?", [branch isEqualToString:@"nightly"] ? @"Nightly" : @"version"];
         a.informativeText = [NSString stringWithFormat:@"The %@ branch (%@) is downloaded from GitHub and the app is rebuilt from your own copy of the game, "
-                             "which takes a few minutes. Your game folder, saves and settings are kept. The app restarts when it is done.", branch, short_commit(latest)];
+                             "which takes a few minutes. Your game folder, soldiers and settings are kept. The app restarts when it is done.", branch, short_commit(latest)];
         [a addButtonWithTitle:@"Update"]; [a addButtonWithTitle:@"Cancel"];
         if ([a runModal] != NSAlertFirstButtonReturn) return;
         NSString *logPath = [data stringByAppendingPathComponent:@"update.log"];
@@ -539,22 +406,8 @@ int ds_launcher_run(const char *game_dir, const char *data_dir)
         }
         check();
     };
-    NSString *tank = [@(game_dir) stringByAppendingPathComponent:@"Resources/Objects.ds2res"], *m = @"art/bitmaps/gui/front_end/main/b_gui_fe_mn_";
-    NSImage *(^art)(NSString *, BOOL) = ^NSImage *(NSString *name, BOOL trim) {
-        CGImageRef img = dds_image(tank_read(tank, [[m stringByAppendingString:name] stringByAppendingString:@".dds"]));
-        NSImage *r = img ? nsimg(img, trim ? opaque_bounds(img) : CGRectZero) : nil; if (img) CGImageRelease(img); return r;
-    };
-    {   /* the main menu's backdrop: eight 256x256 tiles, four across and two down */
-        NSImage *bg = [[NSImage alloc] initWithSize:NSMakeSize(1024, 512)]; BOOL any = NO;
-        [bg lockFocusFlipped:YES];
-        [[NSColor colorWithSRGBRed:0.13 green:0.02 blue:0.01 alpha:1] setFill]; NSRectFill(NSMakeRect(0, 0, 1024, 512));   /* under the tiles' see-through parts */
-        for (int k = 0; k < 8; k++) { NSImage *t = art([NSString stringWithFormat:@"back%02d", k + 1], NO);
-            if (t) { any = YES; [t drawInRect:NSMakeRect(256 * (k % 4), 256 * (k / 4), 256, 256) fromRect:NSZeroRect operation:NSCompositingOperationSourceOver fraction:1 respectFlipped:YES hints:nil]; } }
-        [bg unlockFocus];
-        v.stone = any ? bg : nil;
-    }
-    v.logo = art(@"logo", YES);
-    v.wood = art(@"menubar-up", YES); v.woodHover = art(@"menubar-over", YES); v.woodDown = art(@"menubar-down", YES);
+    v.backdrop = art(data, @"backdrop") ?: art(data, @"menu");
+    NSImage *logo = art(data, @"logo"); v.logo = logo ? trimmed(logo) : nil;
     if (shot) {   /* development: the window as an image */
         NSBitmapImageRep *rep = [v bitmapImageRepForCachingDisplayInRect:v.bounds]; [v cacheDisplayInRect:v.bounds toBitmapImageRep:rep];
         [[rep representationUsingType:NSBitmapImageFileTypePNG properties:@{}] writeToFile:@(shot) atomically:YES];
@@ -564,7 +417,7 @@ int ds_launcher_run(const char *game_dir, const char *data_dir)
     NSWindow *w = [[NSWindow alloc] initWithContentRect:v.frame styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskFullSizeContentView
                                                 backing:NSBackingStoreBuffered defer:NO];
     w.releasedWhenClosed = NO;   /* ARC owns it: AppKit's default would release it again when the close button closes it (a crash on exit) */
-    w.titlebarAppearsTransparent = YES; w.titleVisibility = NSWindowTitleHidden; w.movableByWindowBackground = YES; w.title = @"Dungeon Siege II";
+    w.titlebarAppearsTransparent = YES; w.titleVisibility = NSWindowTitleHidden; w.movableByWindowBackground = YES; w.title = @DS2_TITLE;
     w.backgroundColor = NSColor.blackColor; w.contentView = v; [w center]; [w makeFirstResponder:v];
     __block int result = 0;
     v.onPlay = ^{ result = 1; [NSApp stopModal]; };
@@ -575,9 +428,7 @@ int ds_launcher_run(const char *game_dir, const char *data_dir)
     [NSApp runModalForWindow:w];
     [w orderOut:nil];
     if (!result) return 0;
-    NSString *rv = res.choices[res.index][@"value"], *fv = fps.choices[fps.index][@"value"];
-    NSString *dv = dist.choices[dist.index][@"value"];
-    [@{@"resolution": rv, @"viewDistance": dv, @"frameRate": fv} writeToFile:plistPath atomically:YES];
-    apply(rv, dv, fv);
+    [@{@"screenShape": val(shape), @"frameRate": val(fps), @"novaWorld": val(nova), @"router": val(router)} writeToFile:plistPath atomically:YES];
+    apply(val(shape), val(fps), val(nova), val(router));
     return 1;
 }

@@ -200,6 +200,10 @@ scripts reach the same screens as on Linux:
 - Sound: the mixed output (`W32_AUDIO_DUMP`) has the menu music and the mission sounds.
 - `tests/fuzz_sse.py`: every MMX form of both games matches Unicorn on arm64.
 - `~/Applications/Delta Force.app` and `Delta Force 2.app` launch full screen and quit from the menu.
+- The launch window (`recomp/host/launcher.m`, rendered with `DS_LAUNCHER_SHOT`) with Steam's art and with the games'
+  own (`--no-downloads`); the apps opened without arguments read `Contents/Resources/launch.plist`, start sandboxed and
+  render at the display's shape; the Updates row reads `main` from GitHub. Play's fresh game process (as in the Diablo
+  II port) needs a normal, non-test start to be seen.
 - High frame rates, on a 120 Hz built-in display (test host; frames on screen counted from the drawables'
   `presentedTime`; other test runs shared the machine at times):
   - DF1 Software, 2 minutes of mission (walking, turning, firing): 120 frames a second on screen, ticks 62–63 in every

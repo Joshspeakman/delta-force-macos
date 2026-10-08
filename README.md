@@ -45,7 +45,14 @@ development packages (Linux), and python3. The build takes a minute or two. The 
 soldiers and saves go to the data folder (`~/Games/DeltaForceNative`, `~/Games/DeltaForce2Native`; `--data-dir` to
 choose).
 
-Choose the renderer in the game's own Settings screen, as on Windows.
+On macOS the app opens with a launch window: **Screen Shape** (the display's own shape, or the original 4:3),
+**Frame Rate** (the display's rate, 60, or the game's original pacing), **NovaWorld** (the public game list on or
+off), **Router** (forward the game's port when hosting, or leave the router alone) and **Updates** (rebuilds the app
+from the newest `main` on GitHub, from your own game copy). The choices are kept in the data folder's
+`launcher.plist`. Its art and the app's icon are the game's logo and background from its Steam store page, downloaded
+by `install.sh` into the data folder's `art/` (with `--no-downloads`: the game's own splash and menu screens).
+
+Choose the renderer and resolution in the game's own Settings screen, as on Windows.
 
 ## Multiplayer
 
@@ -59,7 +66,8 @@ Everything is chosen in the game's own multiplayer screens:
 
 A hosted game asks the router to forward UDP 3568 (NAT-PMP or UPnP) while it is hosted. If the router can't, forward
 UDP 3568 to the host by hand. A firewall on the host must let UDP 3568 in (on macOS, allow the app if it asks).
-`DF_NO_P2P=1` keeps games off the DHT (local network only), and `DS_NO_PORTMAP=1` leaves the router alone.
+The launch window's NovaWorld and Router rows turn these off (or, from a terminal, `DF_NO_P2P=1` keeps games off
+the DHT, and `DS_NO_PORTMAP=1` leaves the router alone).
 
 A listed game is reachable by anyone, and the games' network code is from 1998. The game runs in a sandbox (macOS; Linux
 5.13+ with Landlock): it can read only its game, program and data folders, write only its data folder, and can't start or open
