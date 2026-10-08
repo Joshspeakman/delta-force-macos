@@ -147,9 +147,11 @@ player's computer:
   game's code can't address outside of. No new code can be injected: only the recompiled code exists, and a jump
   anywhere else ends the game. Starting programs is refused, and files are mapped into the data folder (the game
   folder is read only).
-- **The sandbox (macOS).** From start-up the process can read only the game, program and data folders, write only the
-  data folder and temporary files, and start or have opened no other program (no process exec, no LaunchServices, no
-  Apple events). That holds even if a bug gave an attacker the native process. `DF_NO_SANDBOX=1` turns it off.
+- **The sandbox.** From start-up the process can read only the game, program and data folders, write only the data
+  folder and temporary files, and start or have opened no other program.
+  - macOS: the system sandbox (no process exec, no LaunchServices, no Apple events).
+  - Linux 5.13+: Landlock; system folders and what graphics need stay readable.
+  This holds even if a bug gave an attacker the native process. `DF_NO_SANDBOX=1` turns it off.
 - **Joiners take datagrams from their host only.** While searching, only from the addresses searched (and the local
   network after a broadcast). Hosts take anyone, as a public game must.
 - **The DHT client.** It parses small answers and keeps addresses; nothing from the DHT is run.
@@ -173,7 +175,6 @@ Known limits:
   travel unencrypted, so don't reuse a real one.
 - A host's public address is visible on the DHT while it hosts.
 - Netsock's compressed mode (`Cmprssh0.dll`) was not exercised by the games' default settings.
-- The Linux build has no sandbox yet.
 
 Switches:
 - `DF_NO_P2P=1`: no DHT.
