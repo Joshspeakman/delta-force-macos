@@ -200,7 +200,8 @@ static uint64_t now_us(void) { return ds_clock_ns() / 1000; }
  * display's are independent, so their phase can slip slowly (a frame shown twice or not at all, rarely); a feedback
  * from the frames' presentation times would go in the shared header's phase_nudge_us.) */
 double dsr_display_hz;
-static double cap_period_ms = -1; static int cap_auto, cap_display;
+static double cap_period_ms = -1; static int cap_auto, cap_display, cap_div = 1;
+void dsr_cap_divide(int k) { cap_div = k < 1 ? 1 : k > 4 ? 4 : k; }   /* "display": a frame every k refreshes */
 static uint64_t deadline;                         /* when the next frame will be released (cap on) */
 uint64_t dsr_cap_waited_us;                       /* time the game's thread has been held back here, in all */
 uint64_t dsr_next_present_us(void) { return cap_period_ms > 0 && !w32_deterministic ? deadline : 0; }
@@ -219,8 +220,8 @@ static void cmd_cap_wait(void)
         else cap_period_ms = atof(v) > 0 ? 1000.0 / atof(v) : 0;
     }
     if (cap_display) {                            /* follows the display (the window moved to another screen) */
-        double hz = dsr_display_hz, p = hz >= 20 && hz <= 1000 ? 1000.0 / hz : 1000.0 / 60;
-        if (p != cap_period_ms) { cap_period_ms = p; dsr_log("fps cap: the display's %.2f Hz", 1000 / p); }
+        double hz = dsr_display_hz, p = (hz >= 20 && hz <= 1000 ? 1000.0 / hz : 1000.0 / 60) * cap_div;
+        if (p != cap_period_ms) { cap_period_ms = p; dsr_log("fps cap: %.2f (the display's %.2f Hz / %d)", 1000 / p, 1000 * cap_div / p, cap_div); }
     }
     uint64_t t = now_us();
     if (cap_period_ms <= 0) { released = t; return; }

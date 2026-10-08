@@ -100,7 +100,7 @@ static int mouse_look_on(void)    /* the scaler's own gate: full screen, capture
 #define PITCH_HI 0x40000000
 
 extern int32_t w32_raw_dx, w32_raw_dy;    /* user32.c */
-uint64_t dsr_next_present_us(void); extern uint64_t dsr_cap_waited_us;   /* ddraw.c */
+uint64_t dsr_next_present_us(void); void dsr_cap_divide(int k); extern uint64_t dsr_cap_waited_us; extern double dsr_display_hz;   /* ddraw.c */
 
 static uint32_t r32(uint32_t a) { return rt_r32(G_MEM, a); }
 static void wr32(uint32_t a, uint32_t v) { rt_w32(G_MEM, a, v); }
@@ -157,14 +157,19 @@ static int sim_known;
 static uint8_t flash[256]; static uint32_t flash_tick;
 typedef struct { uint32_t a, was, wrote; } Undo;
 static Undo undo[NSLOT * 6 + 4]; static int nundo, in_render;
-static uint64_t tick_t0, last_start, last_end, last_work; static uint32_t last_ticks; extern double dsr_display_hz;
+static uint64_t tick_t0, last_start, last_end, last_work; static uint32_t last_ticks;
+static int cap_k = 1, cap_votes;  /* a frame every cap_k refreshes (dsr_cap_divide) */
 static uint64_t est_us = 4000;   /* a render's own work (the cap's waits taken out): the second longest of the last 48 */
 static uint64_t works[48]; static int nworks;
 static uint64_t render_t0, render_w0;
 static int on = -1, lg;
-static struct { long ticks, renders, extras, skips, dropped, late, interp, snaps, jumps, looks, flashes; uint64_t tickmax; double amin, amax, asum; int32_t move[NARR]; } st;
+static struct { long ticks, renders, extras, skips, dropped, late, interp, snaps, jumps, looks, flashes, unrestored; uint64_t tickmax; double amin, amax, asum; int32_t move[NARR]; } st;
 
-static void reset(void) { snap_valid = 0; ticks = 0; mouse_tick = 0; sim_known = 0; look_ok = 1; m_known = 0; flash_tick = 0; }
+static void reset(void)
+{
+    snap_valid = 0; ticks = 0; mouse_tick = 0; sim_known = 0; look_ok = 1; m_known = 0; flash_tick = 0;
+    if (cap_k != 1) { cap_k = 1; dsr_cap_divide(1); }   /* menus: every refresh, as the game draws them */
+}
 static int enabled(void)
 {
     if (on < 0) { const char *e = getenv("DF_HIGH_FPS"); on = !(e && !atoi(e)); e = getenv("DF_FRAME_LOG"); lg = e ? atoi(e) : 0;
@@ -212,6 +217,7 @@ static void tick_starts(void)
         }
     }
     eye_prev = (int32_t)r32(A_EYE);
+    if (lg >= 2) { uint32_t p = r32(A_PLAYER); fprintf(stderr, "dff: tick %u starts: yaw %08x pitch %08x pos %08x %08x %08x\n", ticks + 1, r32(p + 0x30), r32(p + 0x34), r32(p + 0x24), r32(p + 0x28), r32(p + 0x2c)); }
     snap_valid = 1; ticks++; st.ticks++;
     m_known = 0; m_dyaw = m_dpitch = 0;
 }
@@ -263,7 +269,7 @@ static int render_starts(Ctx *c)  /* 1: not drawn now */
     dropped = 0;
     if (lg >= 3 && at > now + 2000) fprintf(stderr, "dff: %.3f render waits %.1f ms (release in %.1f)\n", now / 1000.0, (at - now) / 1000.0, ((double)(int64_t)(dsr_next_present_us() - now)) / 1000.0);
     if (at > now) { sleep_until(at); now = now_us(); }  /* the game's own render, right after a tick: no earlier than needed */
-    if (lg && last_start && dsr_display_hz > 20 && now - last_start > 1.5e6 / dsr_display_hz)
+    if (lg && last_start && dsr_display_hz > 20 && now - last_start > 1.5e6 * cap_k / dsr_display_hz)
         fprintf(stderr, "dff: %.1f ms since the last frame began (it took %.2f ms and ended %.1f ms ago; %u ticks since; next release in %.1f ms)\n",
                 (now - last_start) / 1000.0, last_work / 1000.0, (now - last_end) / 1000.0, ticks - last_ticks,
                 ((double)(int64_t)(dsr_next_present_us() - now)) / 1000.0);
@@ -340,27 +346,58 @@ static void render_ends(void)
     if (w > 20000) w = 20000;
     works[nworks++ % 48] = w;
     { uint64_t a = 0, b = 0; for (int k = 0; k < 48 && k < nworks; k++) { if (works[k] > a) { b = a; a = works[k]; } else if (works[k] > b) b = works[k]; } est_us = b ? b : a; }
+    /* A render longer than a refresh (DF2's Direct3D driver here, large modes): a frame every second refresh (or
+     * third...), each shown as long as the next, rather than each as soon as it is done, unevenly. Back to every
+     * refresh once a render fits with room. Half a second to slow down, two seconds to speed up. */
+    double hz = dsr_display_hz;
+    if (hz >= 20) {
+        double p = 1e6 / hz, need = (double)est_us + 500; int want = cap_k;
+        if (need > cap_k * p) want = (int)ceil(need / p); else if (cap_k > 1 && need < (cap_k - 1) * p * 0.95) want = cap_k - 1;
+        if (want > 4) want = 4;
+        if (want == cap_k) cap_votes = 0;
+        else if (++cap_votes > (want > cap_k ? hz / cap_k / 2 : 2 * hz / cap_k)) {
+            cap_k = want; cap_votes = 0; dsr_cap_divide(cap_k);
+            fprintf(stderr, "df: a frame every %d refreshes (a render takes %.1f ms)\n", cap_k, est_us / 1000.0);
+        }
+    }
 }
 
-/* ---- the loop's Sleep(0): a frame in between, when the next frame is due before the next tick */
+/* ---- the loop's Sleep(0): a frame in between, when the next frame is due before the next tick. Otherwise the wait
+ * for the next tick is a sleep, not the game's spin on Sleep(0) (menus too: the frame cap no longer holds the loop
+ * back at 60 there, the menus' 62.5 frames a second being under the display's rate). */
+static void wait_for_tick(uint64_t now)
+{
+    double a = alpha_at(now);
+    if (a < 1) { uint64_t due = now + (uint64_t)((1 - a) * 16000); if (due > now + 400) sleep_until(due - 250); }
+}
 static void loop_waits(Ctx *c)
 {
-    if (r32(A_STATE) != GAME_LOOP || !r32(A_PLAYER)) { if (ticks) reset(); return; }
     sim_ms = c->ebp - ACC(c); sim_known = 1;
-    if (ticks < 2 || !snap_valid || score_screen()) return;
-    uint64_t now = now_us(), at = start_time(now);
+    uint64_t now = now_us();
+    if (r32(A_STATE) != GAME_LOOP || !r32(A_PLAYER)) { if (ticks) reset(); wait_for_tick(now); return; }
+    if (ticks < 2 || !snap_valid || score_screen()) { wait_for_tick(now); return; }
+    uint64_t at = start_time(now);
     if (alpha_at(at) > 1) {   /* the tick falls due first: the loop ticks, and the game's own render makes the frame */
         st.skips++;
-        double a = alpha_at(now);
-        if (a < 1) { uint64_t due = now + (uint64_t)((1 - a) * 16000); if (due > now + 400) sleep_until(due - 250);
-                     if (lg >= 3 && due > now + 2000) fprintf(stderr, "dff: %.3f wait for the tick %.1f ms (frame start in %.1f, release in %.1f)\n", now / 1000.0, (due - now) / 1000.0, ((double)(int64_t)(at - now)) / 1000.0, ((double)(int64_t)(dsr_next_present_us() - now)) / 1000.0); }   /* not a busy wait */
+        if (lg >= 3) fprintf(stderr, "dff: %.3f wait for the tick (frame start in %.1f, release in %.1f)\n", now / 1000.0,
+                             ((double)(int64_t)(at - now)) / 1000.0, ((double)(int64_t)(dsr_next_present_us() - now)) / 1000.0);
+        wait_for_tick(now);
         return;
     }
     if (lg >= 3 && at > now + 2000) fprintf(stderr, "dff: %.3f wait to start %.1f ms (release in %.1f)\n", now / 1000.0, (at - now) / 1000.0, ((double)(int64_t)(dsr_next_present_us() - now)) / 1000.0);
     if (at > now) sleep_until(at);
     uint32_t fn = r32(r32(A_STATE) + 0x28); if (!fn) return;
     st.extras++;
+    if (lg < 2) { call_guest(c, fn); return; }
+    /* DF_FRAME_LOG=2: every position and angle the render draws is the tick's own again once it returns */
+    static int32_t before[NSLOT][6]; int k = 0;
+    for (int i = 0; i < NARR; i++) for (uint32_t j = 0; j < arrs[i].cap; j++, k++) for (int q = 0; q < 6; q++) before[k][q] = (int32_t)r32(arrs[i].base + j * STRIDE + 0x24 + 4 * q);
+    int32_t eye = (int32_t)r32(A_EYE);
     call_guest(c, fn);
+    k = 0; int bad = 0;
+    for (int i = 0; i < NARR; i++) for (uint32_t j = 0; j < arrs[i].cap; j++, k++) for (int q = 0; q < 6; q++) bad += before[k][q] != (int32_t)r32(arrs[i].base + j * STRIDE + 0x24 + 4 * q);
+    bad += eye != (int32_t)r32(A_EYE);
+    st.unrestored += bad;
 }
 
 int df_frame_hook(Ctx *c, uint32_t addr)
@@ -382,9 +419,9 @@ int df_frame_hook(Ctx *c, uint32_t addr)
         static uint64_t t0; uint64_t t = now_us(); if (!t0) t0 = t;
         if (t - t0 >= 1000000) {
             fprintf(stderr, "dff: %.2fs: ticks %ld renders %ld (in between %ld, ticked first %ld, not drawn %ld, late %ld) alpha %.2f..%.2f avg %.2f; per frame %.0f objects in between, "
-                    "%.1f snapped, %.2f jumps; look-ahead %ld; flash kept %ld; render %.2f ms; ticks up to %.2f ms; largest steps", (t - t0) / 1e6, st.ticks, st.renders, st.extras, st.skips, st.dropped, st.late,
+                    "%.1f snapped, %.2f jumps; look-ahead %ld; flash kept %ld; not put back %ld; render %.2f ms; ticks up to %.2f ms; largest steps", (t - t0) / 1e6, st.ticks, st.renders, st.extras, st.skips, st.dropped, st.late,
                     st.renders ? st.amin : 0, st.renders ? st.amax : 0, st.renders ? st.asum / st.renders : 0, st.renders ? (double)st.interp / st.renders : 0,
-                    st.renders ? (double)st.snaps / st.renders : 0, st.renders ? (double)st.jumps / st.renders : 0, st.looks, st.flashes, est_us / 1000.0, st.tickmax / 1000.0);
+                    st.renders ? (double)st.snaps / st.renders : 0, st.renders ? (double)st.jumps / st.renders : 0, st.looks, st.flashes, st.unrestored, est_us / 1000.0, st.tickmax / 1000.0);
             for (int i = 0; i < NARR; i++) fprintf(stderr, " %.2f", st.move[i] / 65536.0);
             fprintf(stderr, "\n");
             memset(&st, 0, sizeof st); st.amin = 2; t0 = t;
