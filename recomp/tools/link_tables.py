@@ -22,4 +22,8 @@ with open(os.path.join(out, 'fntab.c'), 'w') as t:
     t.write('const struct rt_image { const char *name; uint32_t base, imp_first, imp_count; } rt_images[] = {\n')
     t.writelines('    {"%s", 0x%xu, %d, %d},\n' % (rel, j['base'], j['imp_base'], len(j['imports'])) for tag, rel, j in imgs)
     t.write('};\nconst unsigned rt_images_n = %d;\n' % len(imgs))
+    # guest blocks the runtime commits at load time: arrays the lifted code moved (lift.py DF_MOVED, BLOCKS_C)
+    t.write('const struct rt_block { uint32_t addr, size; const char *what; } rt_blocks[] = {\n')
+    t.writelines('    {0x%08xu, 0x%xu, "%s"},\n' % tuple(b) for _, _, j in imgs for b in j.get('blocks', []))
+    t.write('    {0, 0, 0}\n};\n')
 print('%d functions, %d imports, %d images' % (len(fns), len(imps), len(imgs)))

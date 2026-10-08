@@ -204,6 +204,21 @@ int w32_load(const char *exe_path)
     uint32_t hdrsz = *(uint32_t *)(d + opt + 60);
     vm_register(w32_image_base, (w32_image_size + 0xffff) & ~0xffffu, 0x1000000 /* MEM_IMAGE */);
     vm_register(PEB_ADDR, 0x10000, 0x20000); vm_register(TEB_BASE, MAX_THREADS * 0x2000, 0x20000);
+    {   /* arrays the recompiled code addresses at fixed places outside the image (tools/lift.py DF_MOVED): one
+         * reservation for all of them, each block committed, the pages between them left out (an overrun faults) */
+        extern const struct rt_block { uint32_t addr, size; const char *what; } rt_blocks[] __attribute__((weak));
+        uint32_t lo = 0xffffffffu, hi = 0;
+        for (const struct rt_block *b = rt_blocks; b && b->size; b++) {
+            if (b->addr < lo) lo = b->addr;
+            if (b->addr + b->size > hi) hi = b->addr + b->size;
+        }
+        if (hi) {
+            lo = (lo - 0x4000) & ~0xffffu; hi += 0x4000;
+            if (vm_alloc(lo, hi - lo, 0x2000 /* MEM_RESERVE */, 4) != lo) { fprintf(stderr, "w32: cannot reserve %08x-%08x\n", lo, hi); return -1; }
+            for (const struct rt_block *b = rt_blocks; b->size; b++)
+                if (!vm_alloc(b->addr, b->size, 0x1000 /* MEM_COMMIT */, 4)) { fprintf(stderr, "w32: cannot commit %08x (%s)\n", b->addr, b->what); return -1; }
+        }
+    }
     memcpy(G_MEM + w32_image_base, d, hdrsz);
     for (int k = 0; k < nsec; k++) {
         uint8_t *s = d + opt + optsz + 40 * k;
