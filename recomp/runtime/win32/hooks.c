@@ -52,7 +52,7 @@ __attribute__((unused)) static void guest_format(char *out, size_t cap, uint32_t
     out[n] = 0;
 }
 int native_hook(Ctx *c, uint32_t addr);   /* native.c */
-int df_hook(Ctx *c, uint32_t addr);       /* df_net.c */
+int df_hook(Ctx *c, uint32_t addr);       /* df_hooks.c */
 void rt_hook(Ctx *c, uint32_t addr)
 {
     if (native_hook(c, addr)) return;
@@ -95,9 +95,13 @@ static int keep_multiplayer_button(Ctx *c)
     return 1;
 }
 int native_override(Ctx *c, uint32_t addr);   /* native.c */
+int df_override(Ctx *c, uint32_t addr);   /* df_hooks.c */
 int rt_override(Ctx *c, uint32_t addr)
 {
     if (native_override(c, addr)) return 1;
+#ifdef DF_EDITION
+    if (df_override(c, addr)) return 1;
+#endif
     switch (addr) {
 #ifdef DS2_BROKEN_WORLD
     case 0x0181d35au:

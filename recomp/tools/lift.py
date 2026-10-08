@@ -37,21 +37,42 @@ OVERRIDES = {             # address: description (runtime/win32/hooks.c rt_overr
     0x007663b0: 'UIButton::DisableButton: the main menu keeps its Multiplayer button (GOG 2.3 disables it)',
 }
 
-# Delta Force (runtime/win32/df_net.c df_hook): the same kind of points in Df.exe and Df2.exe
+# Delta Force: native additions at guest addresses in Df.exe / Df2.exe, one table per feature, each served by its own
+# runtime module (runtime/win32/df_hooks.c dispatches). HOOKS run before the instruction at the address; OVERRIDES at a
+# function's first instruction (return 1: the call was done natively). An address belongs to one feature only.
+#   net: df_net.c (LAN over TCP/IP, the NovaWorld stand-in)   frame: df_frame.c (high frame rates)
+#   res: df_res.c (resolutions, widescreen)                   hw: df_hw.c (DF1 Full Screen Hardware)
 DF_HOOKS = {
-    'df1': {
-        0x0044691f: 'host: the connection-type switch (LAN (IPX) hosts over TCP/IP)',
-        0x00470c13: 'join: the connection-type switch (LAN (IPX) searches by broadcast over TCP/IP)',
-        0x004b9156: 'join: the call of netsock_JoinSession (the chosen host\'s address)',
-        0x004b92c4: 'host: the call of netsock_HostSession (the session gets an instance id)',
+    'net': {
+        'df1': {
+            0x0044691f: 'host: the connection-type switch (LAN (IPX) hosts over TCP/IP)',
+            0x00470c13: 'join: the connection-type switch (LAN (IPX) searches by broadcast over TCP/IP)',
+            0x004b9156: 'join: the call of netsock_JoinSession (the chosen host\'s address)',
+            0x004b92c4: 'host: the call of netsock_HostSession (the session gets an instance id)',
+        },
+        'df2': {
+            0x0045c38d: 'host: the connection-type switch (LAN / IPX hosts over TCP/IP)',
+            0x0040861d: 'join: the connection-type switch (LAN / IPX searches by broadcast over TCP/IP)',
+            0x004805b1: 'join: the call of netsock_JoinSession (the chosen host\'s address)',
+            0x00480723: 'host: the call of netsock_HostSession (the session gets an instance id)',
+        },
     },
-    'df2': {
-        0x0045c38d: 'host: the connection-type switch (LAN / IPX hosts over TCP/IP)',
-        0x0040861d: 'join: the connection-type switch (LAN / IPX searches by broadcast over TCP/IP)',
-        0x004805b1: 'join: the call of netsock_JoinSession (the chosen host\'s address)',
-        0x00480723: 'host: the call of netsock_HostSession (the session gets an instance id)',
-    },
+    'frame': {'df1': {}, 'df2': {}},
+    'res': {'df1': {}, 'df2': {}},
+    'hw': {'df1': {}, 'df2': {}},
 }
+DF_OVERRIDES = {
+    'frame': {'df1': {}, 'df2': {}},
+    'res': {'df1': {}, 'df2': {}},
+    'hw': {'df1': {}, 'df2': {}},
+}
+def df_table(features, edition):
+    out = {}
+    for name, games in features.items():
+        for addr, what in games.get(edition, {}).items():
+            assert addr not in out, 'DF %s %#x: already used by another feature' % (name, addr)
+            out[addr] = '%s: %s' % (name, what)
+    return out
 
 RET_FORMS = ('repz ret', 'rep ret', 'bnd ret')
 
@@ -1017,7 +1038,8 @@ def main():
         from editions import identify, PROFILES
         edition = a.game if a.game in ('fnv', 'sims', 'df1', 'df2') else identify(a.exe, prepared=True)
         if edition in ('fnv', 'sims', 'df1', 'df2'):              # Fallout: New Vegas, The Sims, Delta Force: none of the DS2 hooks apply
-            L.hooks = dict(DF_HOOKS.get(edition, {})); L.overrides = {}
+            L.hooks = df_table(DF_HOOKS, edition) if edition in ('df1', 'df2') else {}
+            L.overrides = df_table(DF_OVERRIDES, edition) if edition in ('df1', 'df2') else {}
         if edition == 'sims':
             L.overrides = {0x467020: 'crash reporting (crashpad): not started'}
         elif edition == 'broken-world':

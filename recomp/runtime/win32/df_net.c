@@ -139,7 +139,7 @@ static void lan_note(const char *what)
     static int said[2]; int k = what[0] == 'j';
     if (!said[k]++) fprintf(stderr, "df: LAN game: %s over TCP/IP\n", what);
 }
-int df_hook(Ctx *c, uint32_t addr)
+int df_net_hook(Ctx *c, uint32_t addr)
 {
     net_init();
     switch (addr) {
