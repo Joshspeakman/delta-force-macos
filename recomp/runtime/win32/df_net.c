@@ -39,7 +39,8 @@ static P2pDht *dht; static uint16_t hosting_port; static int searching;
 static P2pDht *p2p(void)
 {
     pthread_mutex_lock(&p2p_lock);
-    if (!dht && !getenv("DF_NO_P2P")) { uint8_t key[20]; p2p_key(P2P_NAME, key); dht = p2p_dht_start(key, 0); }
+    const char *off = getenv("DF_NO_P2P");
+    if (!dht && !(off && atoi(off))) { uint8_t key[20]; p2p_key(P2P_NAME, key); dht = p2p_dht_start(key, 0); }
     P2pDht *d = dht; pthread_mutex_unlock(&p2p_lock);
     return d;
 }
