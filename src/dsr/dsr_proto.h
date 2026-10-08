@@ -44,6 +44,9 @@ enum {
                               {u32 slot, buffer id, byte offset, stride, D3DDECLTYPE}[nelem]: as DSR_DRAW_PROG, from kept buffers */
     DSR_DEPTH_UPLOAD,      /* u32 depth surface id, u32 w, h, float depth[w*h] (0 near .. 1 far, rows top down): a depth buffer the
                               game wrote itself (Delta Force 2's software terrain under its Direct3D polygons) */
+    DSR_DEPTH_READBACK,    /* u32 depth surface id, u32 x, y, w, h, u32 cookie: as DSR_READBACK, the depth values as floats (0 near
+                              .. 1 far, rows top down, tightly packed): a CPU pass that tests against depth the GPU wrote (Delta
+                              Force 1's water under its hardware polygons) */
 };
 #define DSR_VBUFS 65536
 #endif

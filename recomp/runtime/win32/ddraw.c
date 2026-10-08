@@ -262,13 +262,13 @@ static void cmd_frame(void)
 #endif
 }
 static uint32_t rb_cookie; static pthread_mutex_t rb_lock = PTHREAD_MUTEX_INITIALIZER;
-int cmd_readback(uint32_t id, const int32_t *r, uint8_t *dst, uint32_t pitch, uint32_t bpp)
+static int readback_op(uint32_t op, uint32_t id, const int32_t *r, uint8_t *dst, uint32_t pitch, uint32_t bpp)
 {
     uint32_t w = (uint32_t)(r[2] - r[0]), h = (uint32_t)(r[3] - r[1]), row = w * bpp; int ok = 0;
     if (!shm || !w || !h || row * h > DSR_READBACK_SIZE) return 0;
     pthread_mutex_lock(&rb_lock);
     rb_cookie = (rb_cookie + 1) & 0x7fffffffu;   /* the renderer sets the high bit when it could not do it */
-    uint32_t *p = cmd_begin(DSR_READBACK, 24); p[0] = id; p[1] = (uint32_t)r[0]; p[2] = (uint32_t)r[1]; p[3] = w; p[4] = h; p[5] = rb_cookie; cmd_end();
+    uint32_t *p = cmd_begin(op, 24); p[0] = id; p[1] = (uint32_t)r[0]; p[2] = (uint32_t)r[1]; p[3] = w; p[4] = h; p[5] = rb_cookie; cmd_end();
     for (uint64_t t0 = now_us(); now_us() - t0 < 3000000; ) {
         uint32_t d = __atomic_load_n(&shm->readback_done, __ATOMIC_ACQUIRE);
         if (d == rb_cookie) { ok = 1; break; }
@@ -280,6 +280,9 @@ int cmd_readback(uint32_t id, const int32_t *r, uint8_t *dst, uint32_t pitch, ui
     pthread_mutex_unlock(&rb_lock);
     return ok;
 }
+int cmd_readback(uint32_t id, const int32_t *r, uint8_t *dst, uint32_t pitch, uint32_t bpp) { return readback_op(DSR_READBACK, id, r, dst, pitch, bpp); }
+/* a depth surface's values (floats, 0 near .. 1 far) into dst, pitch in bytes */
+int cmd_depth_readback(uint32_t id, const int32_t *r, float *dst, uint32_t pitch) { return readback_op(DSR_DEPTH_READBACK, id, r, (uint8_t *)dst, pitch, 4); }
 
 /* ---- guest scratch for callback arguments ---- */
 static uint32_t scratch(uint32_t n) { return heap_alloc(w32_process_heap, 8, n); }

@@ -71,12 +71,31 @@ DF_HOOKS = {
     },
     'frame': {'df1': {}, 'df2': {}},
     'res': {'df1': {}, 'df2': {}},
-    'hw': {'df1': {}, 'df2': {}},
+    'hw': {
+        'df1': {
+            0x004856f8: 'the 3D frame: the objects begin (GPU segment opens; colour and depth go up with the first polygon)',
+            0x00485739: 'the 3D frame ends (GPU segment closes: the picture comes back into the view rows)',
+            0x0048d040: 'the water plane seen from above: colour and depth back to the CPU first when it draws',
+            0x0048d570: 'the water plane seen from below: colour and depth back to the CPU first when it draws',
+            0x00407ac3: 'settings applied (mov [0x67f4e4], eax): Colors 3, Hardware, runs as 16 Million with the GPU on',
+            0x00407985: 'settings screen opened (mov [0x4ced24], eax): 16 Million with the GPU on shows as Hardware (3)',
+            0x004127df: 'a Colors arrow (mov [0x4ced24], ebx): the choice cycles through 0..3',
+            0x004121b2: 'the Colors label: Hardware (3) takes the 16 Million path ...',
+            0x00412382: '... (push edx, the label text): the text "Hardware"',
+        },
+        'df2': {},
+    },
 }
 DF_OVERRIDES = {
     'frame': {'df1': {}, 'df2': {}},
     'res': {'df1': {}, 'df2': {}},
-    'hw': {'df1': {}, 'df2': {}},
+    'hw': {
+        'df1': {
+            0x00462df0: 'a polygon (flags, verts, material): drawn on the GPU in Full Screen Hardware',
+            0x0046cac0: 'a polygon into the span buffer (same arguments): drawn on the GPU in Full Screen Hardware',
+        },
+        'df2': {},
+    },
 }
 def df_table(features, edition):
     out = {}
