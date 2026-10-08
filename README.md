@@ -59,6 +59,12 @@ A hosted game asks the router to forward UDP 3568 (NAT-PMP or UPnP) while it is 
 UDP 3568 to the host by hand. A firewall on the host must let UDP 3568 in (on macOS, allow the app if it asks).
 `DF_NO_P2P=1` keeps games off the DHT (local network only), and `DS_NO_PORTMAP=1` leaves the router alone.
 
+A listed game is reachable by anyone, and the games' network code is from 1998. On the Mac the game runs in a
+sandbox: it can read only its game, program and data folders, write only its data folder, and can't start or open
+other programs. A joining player takes network traffic from the chosen host only. Game passwords travel unencrypted,
+as in 1998: don't reuse a real password. Details, and what was tested, in
+[docs/DF-PORT.md](docs/DF-PORT.md#security).
+
 ## Building by hand
 
 ```sh

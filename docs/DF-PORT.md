@@ -137,6 +137,44 @@ over IPX through DirectPlay and NovaWorld through NovaLogic's servers and web pa
 **Not verified**: a game across the internet between two different networks (both routers' port mapping); more than
 two players; long games.
 
+### Security
+
+A game hosted with NovaWorld is listed publicly, so anyone can send datagrams to its host, and a malicious host can
+send them to whoever joins. The games' 1998 network code was never written for that. What stands between it and the
+player's computer:
+
+- **The recompilation.** Guest memory is a separate 4 GB region (followed by a 256 MB inaccessible guard) that the
+  game's code can't address outside of. No new code can be injected: only the recompiled code exists, and a jump
+  anywhere else ends the game. Starting programs is refused, and files are mapped into the data folder (the game
+  folder is read only).
+- **The sandbox (macOS).** From start-up the process can read only the game, program and data folders, write only the
+  data folder and temporary files, and start or have opened no other program (no process exec, no LaunchServices, no
+  Apple events). That holds even if a bug gave an attacker the native process. `DF_NO_SANDBOX=1` turns it off.
+- **Joiners take datagrams from their host only.** While searching, only from the addresses searched (and the local
+  network after a broadcast). Hosts take anyone, as a public game must.
+- **The DHT client.** It parses small answers and keeps addresses; nothing from the DHT is run.
+  - Transaction ids are random 32-bit values.
+  - Addresses at loopback, private or reserved ranges are not taken from the public DHT.
+  - Lists are capped per answer.
+  - Hosts that never answer stop being asked.
+- **Router.** A forward is held only while hosting and removed at exit. One left by a crash is removed at the next
+  start.
+
+Checked:
+- The DHT parser with 2,000,000 damaged answers under AddressSanitizer and UndefinedBehaviorSanitizer
+  (`tests/p2p_dht_fuzz.c`, in CI).
+- Each game's host and joiner, with a runtime built with `DF_SANITIZE=address`, flooded for two minutes with about
+  90,000–106,000 damaged datagrams made from real game traffic (`tests/net_flood.py`, corpus from
+  `W32_NETCAPTURE`). No sanitizer report, no fault, the games kept running.
+- A joiner given junk from another address dropped all of it.
+
+Known limits:
+- Anyone can join a public game and spam joins, as in 1998; use a game password for a private game. Passwords
+  travel unencrypted, so don't reuse a real one.
+- A host's public address is visible on the DHT while it hosts.
+- Netsock's compressed mode (`Cmprssh0.dll`) was not exercised by the games' default settings.
+- The Linux build has no sandbox yet.
+
 Switches:
 - `DF_NO_P2P=1`: no DHT.
 - `P2P_DHT_BOOTSTRAP=host:port,...`: other bootstrap nodes (tests).
