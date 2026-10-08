@@ -356,6 +356,19 @@ static void rel_motion(double gx, double gy)
 - (void)scrollWheel:(NSEvent *)e
 {
     static double acc; acc += e.hasPreciseScrollingDeltas ? e.scrollingDeltaY / 10.0 : e.scrollingDeltaY;
+#ifdef DF_EDITION
+    /* the launch window's Modern controls (DF_WHEEL_CYCLE=1): a notch of the wheel cycles weapons, as the game's Backspace
+     * (its key maps know mouse buttons only); a press, released a moment later, at most one every 120 ms */
+    static int cycle = -1; static double last;
+    if (cycle < 0) { const char *c = getenv("DF_WHEEL_CYCLE"); cycle = c && atoi(c); }
+    if (cycle) {
+        if (acc < 1 && acc > -1) return;
+        acc = 0; double now = CACurrentMediaTime(); if (now - last < 0.12) return; last = now;
+        key_event(0x33, 1, 0);
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 60 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{ key_event(0x33, 0, 0); });
+        return;
+    }
+#endif
     while (acc >= 1 || acc <= -1) { int d = acc > 0 ? 1 : -1; acc -= d; post(0x20a, ((uint32_t)(int16_t)(120 * d) << 16) | mk(), pos_lp()); }
 }
 - (void)keyDown:(NSEvent *)e

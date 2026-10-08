@@ -204,6 +204,10 @@ scripts reach the same screens as on Linux:
   own (`--no-downloads`); the apps opened without arguments read `Contents/Resources/launch.plist`, start sandboxed and
   render at the display's shape; the Updates row reads `main` from GitHub. Play's fresh game process (as in the Diablo
   II port) needs a normal, non-test start to be seen.
+- Controls (launch window): the key maps' layout read from the games' Remap screens (DF1: 46 entries at 0x6a0 of each
+  player0N.ply; DF2: 59 at 0x2e0 of each df2plyrs.sav soldier and in Df2.dfk; {key, mouse button, 0}); Modern written
+  and shown by both games' Remap screens; Modern then Classic gives back the original file byte for byte. The wheel's
+  weapon cycling (host, DF_WHEEL_CYCLE) and playing with Modern keys need a normal start to be seen.
 - High frame rates, on a 120 Hz built-in display (test host; frames on screen counted from the drawables'
   `presentedTime`; other test runs shared the machine at times):
   - DF1 Software, 2 minutes of mission (walking, turning, firing): 120 frames a second on screen, ticks 62–63 in every

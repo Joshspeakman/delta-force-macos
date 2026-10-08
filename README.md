@@ -45,12 +45,20 @@ development packages (Linux), and python3. The build takes a minute or two. The 
 soldiers and saves go to the data folder (`~/Games/DeltaForceNative`, `~/Games/DeltaForce2Native`; `--data-dir` to
 choose).
 
-On macOS the app opens with a launch window: **Screen Shape** (the display's own shape, or the original 4:3),
-**Frame Rate** (the display's rate, 60, or the game's original pacing), **NovaWorld** (the public game list on or
-off), **Router** (forward the game's port when hosting, or leave the router alone) and **Updates** (rebuilds the app
-from the newest `main` on GitHub, from your own game copy). The choices are kept in the data folder's
-`launcher.plist`. Its art and the app's icon are the game's logo and background from its Steam store page, downloaded
-by `install.sh` into the data folder's `art/` (with `--no-downloads`: the game's own splash and menu screens).
+On macOS the app opens with a launch window, laid out like the Dungeon Siege ports': a banner (the game's logo, its
+background and one of its screenshots), the **Controls** row, and buttons for **Display** (screen shape: the display's
+own or the original 4:3; frame rate: the display's, 60, or the game's original pacing), **Multiplayer** (the NovaWorld
+public game list on or off; forward the game's port when hosting, or leave the router alone), **Key Guide** and
+**Updates** (rebuilds the app from the newest `main` on GitHub, from your own game copy). The choices are kept in the
+data folder's `launcher.plist`. Its art and the app's icon come from the game's Steam store page, downloaded by
+`install.sh` into the data folder's `art/` (with `--no-downloads`: the game's own splash and menu screens).
+
+**Controls**: *Classic* is the game's own layout (arrow keys to move, mouse to look). *Modern* is a modern shooter's:
+W A S D, Space jump, C crouch, Z prone, X stand, R reload, G grenade, Q (or the right button) scope, Tab objectives,
+M map, and the mouse wheel cycles weapons; every action that moved has a key of its own, listed by Key Guide. The
+launch window writes the layout into your soldiers' own key maps (the copies in the data folder; the originals are
+backed up once to `backup/controls`), so the game's Settings › Keyboard Remap shows it and can change any key. A map
+changed there shows as *Custom* and is left alone.
 
 Choose the renderer and resolution in the game's own Settings screen, as on Windows.
 

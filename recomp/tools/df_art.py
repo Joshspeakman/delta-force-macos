@@ -6,11 +6,13 @@ The launch window's and the icon's art (install.sh), written to the data folder'
                 download, Delta Force's dagger cut from its own splash screen (Dfbase.pff DFSPLASH.PCX); Delta Force 2
                 then has none (the window writes the title)
   backdrop.jpg  Steam's library background (a red texture for Delta Force, a gold one for Delta Force 2)
+  shot.jpg      one of the screenshots on the store page (400x300), for the launch window's banner (a soldier firing at sunset in
+                Delta Force, the train firefight in Delta Force 2); without it the banner is the logo on the background
   menu.png/jpg  without that download, the game's own main-menu screen (DF_MAIN.PCX / DF2_MAIN.JPG): the launch
                 window's backdrop then (the icon keeps a plain tile; the screen is too busy behind the logo)
 Only the standard library: NovaLogic's PFF3 archives and 8-bit PCX images are read here, PNG is written here.
 """
-import os, struct, sys, urllib.request, zlib
+import json, os, struct, sys, urllib.request, zlib
 
 def pff_read(path, name):
     """a file from a PFF3 archive: 20-byte header (size, 'PFF3', count, record size, records' offset), then records of
@@ -50,14 +52,27 @@ def png_write(path, w, h, rows, alpha=False):
         f.write(b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', w, h, 8, 6 if alpha else 2, 0, 0, 0))
                 + chunk(b'IDAT', zlib.compress(raw, 9)) + chunk(b'IEND', b''))
 
-def download(url, path, magic):
+def download(url, path, magic, least=20000):
     try:
         with urllib.request.urlopen(url, timeout=20) as r: data = r.read()
     except Exception:
         return False
-    if not data.startswith(magic) or len(data) < 20000: return False
+    if not data.startswith(magic) or len(data) < least: return False
     with open(path + '.part', 'wb') as f: f.write(data)
     os.replace(path + '.part', path); return True
+
+SHOTS = {32620: ('0000008793.1920x1080.jpg', 1), 32630: ('0000008812.1920x1080.jpg', 2)}   # (file, index on the store page)
+
+def screenshot(app, out):
+    """the banner's screenshot: the one chosen above, or (if Steam renamed it) the same place in the store page's list"""
+    name, idx = SHOTS[app]
+    if download('https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/%d/%s' % (app, name), out, b'\xff\xd8\xff', 8000): return True
+    try:
+        with urllib.request.urlopen('https://store.steampowered.com/api/appdetails?appids=%d&filters=screenshots' % app, timeout=20) as r:
+            shots = json.load(r)[str(app)]['data']['screenshots']
+        return download(shots[min(idx, len(shots) - 1)]['path_full'].split('?')[0], out, b'\xff\xd8\xff', 8000)
+    except Exception:
+        return False
 
 def dagger(game, out):
     """Delta Force's logo from its splash screen (the dagger and the name on the left; the right half is text): the
@@ -84,6 +99,7 @@ def main():
     got = []
     if not nodl and download(cdn + 'logo.png', os.path.join(art, 'logo.png'), b'\x89PNG'): got.append('logo (Steam)')
     if not nodl and download(cdn + 'library_hero.jpg', os.path.join(art, 'backdrop.jpg'), b'\xff\xd8\xff'): got.append('backdrop (Steam)')
+    if not nodl and screenshot(app, os.path.join(art, 'shot.jpg')): got.append('screenshot (Steam)')
     if not os.path.exists(os.path.join(art, 'logo.png')) and not df2 and dagger(game, os.path.join(art, 'logo.png')): got.append('logo (splash screen)')
     if not os.path.exists(os.path.join(art, 'backdrop.jpg')):
         if df2:
