@@ -138,9 +138,8 @@ DF_OVERRIDES = {
 # that names an address inside an old array but is not listed stops the build (constants and neighbours that merely
 # fall in the range are listed under 'other').
 #   old, size: the array in the executable; new, new_size: the block. It starts at the old array's offset within its
-#   4 KB page (what the renderers draw depends on low address bits: DF1's clouds came out different with the arrays
-#   page-aligned; with the same offsets 1024x768 is pixel for pixel the original), ends on a 16 KB boundary and has
-#   16 KB free after it.
+#   4 KB page (the same alignment as before, for any code that depends on it), ends on a 16 KB boundary and has 16 KB
+#   free after it.
 DF_MOVED = {
     'res': {
         'df1': [

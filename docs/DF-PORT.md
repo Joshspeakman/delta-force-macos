@@ -123,8 +123,9 @@ mode. `DF_RES=WxH` sets the size (a taller one is scaled down to 768 lines, keep
 - Limits removed by moving arrays (`tools/lift.py` `DF_MOVED`, the 'res' entries): the lifter rewrites the address
   field of each listed instruction (before decoding, so every use follows) to a block above the image that the runtime
   commits at load time (`loader.c`, `rt_blocks` in fntab.c), one reservation with an uncommitted page after each block
-  (an overrun faults); each block starts at its array's offset within the 4 KB page (DF1's clouds depend on low address
-  bits; so 1024x768 stays pixel for pixel the original). The build stops if any other instruction or fixup still names an address inside a moved array.
+  (an overrun faults); each block starts at its array's offset within the 4 KB page (the same alignment as before).
+  At 1024x768 the frames match the build without it: terrain, objects and HUD pixel for pixel. (DF1's clouds are not a
+  reference: a few hundred column pairs of them change with the command line or the data folder's name, in any build.) The build stops if any other instruction or fixup still names an address inside a moved array.
   DF1: the terrain's per-column-pair records (0xcb8d84, 512 pairs) and per-column offsets (0xc975a8, 1024), and the
   static z buffer (0x503740: 2·W·(H−H/8) bytes, past it from 1152x768); DF2: the terrain's per-column tables 0x51d60c
   and 0x532610 (1028 columns), kept 0x15004 apart (0x4728dd reads one through a pointer into the other).
@@ -299,6 +300,7 @@ Switches:
 | `W32_SMCLOG=1` | code bytes changed at run time |
 | `W32_DDLOG=1` | DirectDraw/Direct3D calls and each distinct draw state |
 | `DF_MOUSELOG=1` | SetCursorPos and posted mouse messages |
+| `DF_RES=WxH`, `DF_RES=off`, `DF_RESLOG=1` | the size the "1024x768" choice renders at (default: 768 lines at the screen's shape); the original 1024x768; DF2's HUD.DEF layout as loaded |
 | `DF_HARDWARE=1`, `DF_HWLOG=1` | DF1 Full Screen Hardware in any 32-bit mode; a line a second (polygons, draws, textures, syncs, readback cost, the object part's time with or without the GPU) and each new polygon kind |
 | `DF_HW_DUAL=<n>` `DF_HW_DUAL_DIR=<dir>` `DF_HW_DUAL_FROM=<seg>` | the CPU draws every polygon too (its picture stays on screen); every n-th frame both pictures of that frame go to `<dir>/<frame>_cpu.ppm` / `_gpu.ppm` |
 | `DF_HW_POINT=1`, `DF_HW_MIPS=0` | nearest, affine texturing as the CPU does (pixel comparisons); no mipmaps |
