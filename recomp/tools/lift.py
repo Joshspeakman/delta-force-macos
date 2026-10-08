@@ -37,6 +37,18 @@ OVERRIDES = {             # address: description (runtime/win32/hooks.c rt_overr
     0x007663b0: 'UIButton::DisableButton: the main menu keeps its Multiplayer button (GOG 2.3 disables it)',
 }
 
+# Delta Force (runtime/win32/df_net.c df_hook): the same kind of points in Df.exe and Df2.exe
+DF_HOOKS = {
+    'df1': {
+        0x0044691f: 'host: the connection-type switch (LAN (IPX) hosts over TCP/IP)',
+        0x00470c13: 'join: the connection-type switch (LAN (IPX) searches by broadcast over TCP/IP)',
+    },
+    'df2': {
+        0x0045c38d: 'host: the connection-type switch (LAN / IPX hosts over TCP/IP)',
+        0x0040861d: 'join: the connection-type switch (LAN / IPX searches by broadcast over TCP/IP)',
+    },
+}
+
 RET_FORMS = ('repz ret', 'rep ret', 'bnd ret')
 
 class SlotInsn:
@@ -1001,7 +1013,7 @@ def main():
         from editions import identify, PROFILES
         edition = a.game if a.game in ('fnv', 'sims', 'df1', 'df2') else identify(a.exe, prepared=True)
         if edition in ('fnv', 'sims', 'df1', 'df2'):              # Fallout: New Vegas, The Sims, Delta Force: none of the DS2 hooks apply
-            L.hooks = {}; L.overrides = {}
+            L.hooks = dict(DF_HOOKS.get(edition, {})); L.overrides = {}
         if edition == 'sims':
             L.overrides = {0x467020: 'crash reporting (crashpad): not started'}
         elif edition == 'broken-world':

@@ -42,7 +42,9 @@ IMPL(wsock32, ord52)
     static __thread uint32_t blk; if (!blk) blk = heap_alloc(w32_process_heap, 8, 1024);
     char name[256]; snprintf(name, sizeof name, "%s", GS(ARG(0))); char me[256]; local_host_name(me, sizeof me);
     uint32_t addrs[16]; int n = 0;
-    if (!strcasecmp(name, me) || !*name) {
+    int w32_netvirt(void);
+    if ((!strcasecmp(name, me) || !*name) && w32_netvirt()) addrs[n++] = htonl(0x7f000000u | (uint32_t)w32_netvirt());   /* winsock.c */
+    else if (!strcasecmp(name, me) || !*name) {
         struct ifaddrs *ifs = 0;
         if (!getifaddrs(&ifs)) {
             for (struct ifaddrs *i = ifs; i && n < 16; i = i->ifa_next)

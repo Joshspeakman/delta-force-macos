@@ -27,7 +27,7 @@ static void socket_no_sigpipe(int fd)
 #define INVALID_SOCKET_ 0xffffffffu
 #define SOCKET_ERROR_ 0xffffffffu
 enum { MAXS = 256, SBASE = 0x1000 };
-static struct { int fd; int nb; } S[MAXS];
+static struct { int fd; int nb; int bound; } S[MAXS];
 static pthread_mutex_t s_lock = PTHREAD_MUTEX_INITIALIZER;
 
 static uint32_t wsa_err(int e)
@@ -83,6 +83,46 @@ static void to_guest(const struct sockaddr_in *a, uint32_t g, uint32_t lenp)
     if (lenp) rt_w32(G_MEM, lenp, 16);
 }
 
+/* W32_NETVIRT=k (development, 1-9): this copy is 127.0.0.k on a virtual network of copies running on one computer, so
+ * that games whose protocol addresses players by IP alone (Delta Force's Netsock answers every peer on one fixed port)
+ * can be hosted and joined between two copies. Every socket is bound on 127.0.0.1 at a port of its own copy's range
+ * (30000 + 2000 k + port % 2000; sockets the game never binds get one before they send); datagrams to 127.0.0.j go to
+ * copy j's range, to 255.255.255.255 to every copy's; senders are shown as 127.0.0.j at their virtual port. */
+static int virt = -1; static uint16_t vports[64]; static int nvports, vnext = 200;
+int w32_netvirt(void) { if (virt < 0) { const char *v = getenv("W32_NETVIRT"); virt = v ? atoi(v) : 0; if (virt < 0 || virt > 9) virt = 0; } return virt; }
+static uint16_t vreal(int k, uint16_t p) { return (uint16_t)(30000 + 2000 * k + p % 2000); }
+static void vlocal(struct sockaddr_in *a, uint16_t vport)          /* a host address for this copy's virtual port */
+{
+    pthread_mutex_lock(&s_lock);
+    int seen = 0; for (int i = 0; i < nvports; i++) if (vports[i] == vport) seen = 1;
+    if (!seen && nvports < 64) vports[nvports++] = vport;
+    pthread_mutex_unlock(&s_lock);
+    a->sin_addr.s_addr = htonl(INADDR_LOOPBACK); a->sin_port = htons(vreal(virt, vport));
+}
+static int vguest(struct sockaddr_in *a)                           /* a host sender -> its virtual address */
+{
+    uint16_t r = ntohs(a->sin_port);
+    if (a->sin_addr.s_addr != htonl(INADDR_LOOPBACK) || r < 32000 || r >= 50000) return 0;
+    int k = (r - 30000) / 2000; uint16_t low = (uint16_t)((r - 30000) % 2000), vp = low;
+    for (int i = 0; i < nvports; i++) if (vports[i] % 2000 == low) vp = vports[i];
+    a->sin_addr.s_addr = htonl(0x7f000000u | (uint32_t)k); a->sin_port = htons(vp); return 1;
+}
+static int vbind_if_needed(uint32_t s, int fd)
+{
+    pthread_mutex_lock(&s_lock); int b = S[s - SBASE].bound; pthread_mutex_unlock(&s_lock);
+    if (b) return 0;
+    struct sockaddr_in a = {0};
+#ifdef __APPLE__
+    a.sin_len = sizeof a;
+#endif
+    a.sin_family = AF_INET;
+    for (int tries = 0; tries < 800; tries++) {
+        pthread_mutex_lock(&s_lock); uint16_t vp = (uint16_t)vnext++; if (vnext >= 1000) vnext = 200; pthread_mutex_unlock(&s_lock);
+        vlocal(&a, vp);
+        if (!bind(fd, (struct sockaddr *)&a, sizeof a)) { pthread_mutex_lock(&s_lock); S[s - SBASE].bound = 1; pthread_mutex_unlock(&s_lock); return 0; }
+    }
+    return -1;
+}
 IMPL(wsock32, ord23)                                    /* socket(af, type, protocol) */
 {
     uint32_t af = ARG(0), type = ARG(1), proto = ARG(2);
@@ -92,8 +132,9 @@ IMPL(wsock32, ord23)                                    /* socket(af, type, prot
     if (fd < 0) { w32_set_last_error(c, wsa_err(errno)); RET(INVALID_SOCKET_, 3); }
     socket_no_sigpipe(fd);
     fcntl(fd, F_SETFD, FD_CLOEXEC);
+    if (type == 2) { int one = 1; setsockopt(fd, SOL_SOCKET, SO_BROADCAST, &one, sizeof one); }   /* LAN searches (df_net.c) */
     pthread_mutex_lock(&s_lock); int k = 0; while (k < MAXS && S[k].fd) k++;
-    if (k < MAXS) { S[k].fd = fd + 1; S[k].nb = 0; }
+    if (k < MAXS) { S[k].fd = fd + 1; S[k].nb = 0; S[k].bound = 0; }
     pthread_mutex_unlock(&s_lock);
     if (k == MAXS) { close(fd); w32_set_last_error(c, 10024); RET(INVALID_SOCKET_, 3); }
     RET(SBASE + (uint32_t)k, 3);
@@ -107,7 +148,9 @@ IMPL(wsock32, ord3)                                     /* closesocket(s) */
 IMPL(wsock32, ord2)                                     /* bind(s, addr, len) */
 {
     SOCK(ARG(0), 3); struct sockaddr_in a; if (!to_host(ARG(1), ARG(2), &a)) RET(fail(c, 10014), 3);
+    if (w32_netvirt()) { uint16_t vp = ntohs(a.sin_port); if (!vp) { pthread_mutex_lock(&s_lock); vp = (uint16_t)vnext++; pthread_mutex_unlock(&s_lock); } vlocal(&a, vp); }
     if (bind(fd, (struct sockaddr *)&a, sizeof a)) RET(fail_errno(c), 3);
+    pthread_mutex_lock(&s_lock); S[ARG(0) - SBASE].bound = 1; pthread_mutex_unlock(&s_lock);
     RET(0, 3);
 }
 IMPL(wsock32, ord4)                                     /* connect(s, addr, len) */
@@ -149,7 +192,19 @@ IMPL(wsock32, ord16)                                    /* recv(s, buf, len, fla
 IMPL(wsock32, ord20)                                    /* sendto(s, buf, len, flags, to, tolen) */
 {
     SOCK(ARG(0), 6); struct sockaddr_in a; ssize_t n;
-    if (ARG(4)) { if (!to_host(ARG(4), ARG(5), &a)) RET(fail(c, 10014), 6); n = sendto(fd, GP(ARG(1)), ARG(2), (int)(ARG(3) & 1) | MSG_NOSIGNAL, (struct sockaddr *)&a, sizeof a); }
+    if (ARG(4) && w32_netvirt()) {
+        if (!to_host(ARG(4), ARG(5), &a)) RET(fail(c, 10014), 6);
+        uint32_t d = ntohl(a.sin_addr.s_addr); uint16_t vp = ntohs(a.sin_port);
+        if (d == 0xffffffffu || (d >> 8) == 0x7f0000u) {
+            if (vbind_if_needed(ARG(0), fd)) RET(fail_errno(c), 6);
+            a.sin_addr.s_addr = htonl(INADDR_LOOPBACK); n = (ssize_t)ARG(2);
+            for (int k = d == 0xffffffffu ? 1 : (int)(d & 255); k <= (d == 0xffffffffu ? 9 : (int)(d & 255)); k++) {
+                a.sin_port = htons(vreal(k ? k : virt, vp));
+                ssize_t r = sendto(fd, GP(ARG(1)), ARG(2), (int)(ARG(3) & 1) | MSG_NOSIGNAL, (struct sockaddr *)&a, sizeof a);
+                if (r < 0 && d != 0xffffffffu) n = r;
+            }
+        } else n = sendto(fd, GP(ARG(1)), ARG(2), (int)(ARG(3) & 1) | MSG_NOSIGNAL, (struct sockaddr *)&a, sizeof a);
+    } else if (ARG(4)) { if (!to_host(ARG(4), ARG(5), &a)) RET(fail(c, 10014), 6); n = sendto(fd, GP(ARG(1)), ARG(2), (int)(ARG(3) & 1) | MSG_NOSIGNAL, (struct sockaddr *)&a, sizeof a); }
     else n = send(fd, GP(ARG(1)), ARG(2), (int)(ARG(3) & 1) | MSG_NOSIGNAL);
     if (n < 0) RET(fail_errno(c), 6);
     RET((uint32_t)n, 6);
@@ -159,6 +214,7 @@ IMPL(wsock32, ord17)                                    /* recvfrom(s, buf, len,
     SOCK(ARG(0), 6); struct sockaddr_in a; socklen_t l = sizeof a; memset(&a, 0, sizeof a);
     ssize_t n = recvfrom(fd, GP(ARG(1)), ARG(2), (int)(ARG(3) & 3), (struct sockaddr *)&a, &l);
     if (n < 0) RET(fail_errno(c), 6);
+    if (w32_netvirt()) vguest(&a);
     if (ARG(4)) to_guest(&a, ARG(4), ARG(5));
     RET((uint32_t)n, 6);
 }
@@ -167,6 +223,7 @@ IMPL(wsock32, ord6)                                     /* getsockname(s, addr, 
 {
     SOCK(ARG(0), 3); struct sockaddr_in a; socklen_t l = sizeof a;
     if (getsockname(fd, (struct sockaddr *)&a, &l)) RET(fail_errno(c), 3);
+    if (w32_netvirt()) vguest(&a);
     to_guest(&a, ARG(1), ARG(2)); RET(0, 3);
 }
 IMPL(wsock32, ord5)                                     /* getpeername(s, addr, len*) */

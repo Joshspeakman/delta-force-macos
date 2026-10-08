@@ -52,9 +52,13 @@ __attribute__((unused)) static void guest_format(char *out, size_t cap, uint32_t
     out[n] = 0;
 }
 int native_hook(Ctx *c, uint32_t addr);   /* native.c */
+int df_hook(Ctx *c, uint32_t addr);       /* df_net.c */
 void rt_hook(Ctx *c, uint32_t addr)
 {
     if (native_hook(c, addr)) return;
+#ifdef DF_EDITION
+    if (df_hook(c, addr)) return;
+#endif
     switch (addr) {
     case DS2_MOOD_READ: mood_read(c); break;
     default:   /* development trace hooks (tools/lift.py DS_TRACE_HOOKS) */
