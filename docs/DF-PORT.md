@@ -128,6 +128,14 @@ scripts reach the same screens as on Linux:
 - DF2 Hardware's depth upload (`depth_upload` in renderer.m, `fs_zupload`): the snowflakes are hidden behind the
   terrain the CPU drew. Checked by uploading an all-near depth instead (every flake disappears) and by skipping the
   upload (flakes show through the near ground).
+- DF1 Full Screen Hardware: the first mission of every campaign (Peru, Chad, Indonesia at night, Uzbekistan, Novaya
+  Zemlya) against software in the same frame (`DF_HW_DUAL`): trees and palms hidden behind hills, buildings,
+  soldiers, the weapon, muzzle flashes, an M203 explosion and its smoke, tracers, the scope's picture-in-picture view;
+  average colours of the same objects within 1-2 levels. Water through `DF_HW_FLOOD` (walls and the well half under
+  water, blended as in software). Windowed, 400x300, the Colors arrows, label and `renderer = 3` round trip through
+  Exit Game; a 4.5-minute run walking and firing with no failed readback. Not seen: vehicles (not reached), 65K with
+  Hardware (65 Thousand needs a 3Dfx card and is never selectable here), the GL path in a game (only in the renderer
+  test, on the Mac's OpenGL 4.1).
 - Sound: the mixed output (`W32_AUDIO_DUMP`) has the menu music and the mission sounds.
 - `tests/fuzz_sse.py`: every MMX form of both games matches Unicorn on arm64.
 - `~/Applications/Delta Force.app` and `Delta Force 2.app` launch full screen and quit from the menu.
