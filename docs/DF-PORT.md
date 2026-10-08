@@ -174,6 +174,12 @@ scripts reach the same screens as on Linux:
   Exit Game; a 4.5-minute run walking and firing with no failed readback. Not seen: vehicles (not reached), 65K with
   Hardware (65 Thousand needs a 3Dfx card and is never selectable here), the GL path in a game (only in the renderer
   test, on the Mac's OpenGL 4.1).
+- Screen shapes (test host, `DF_RES`, into the first mission): DF1 16 Million at 960x768, 1024x576, 1184x768 (this
+  MacBook's 1728x1117 screen, the default), 1360x768, 1792x768 and 2048x768, 256 colours at 1184x768, Hardware at 1360x768,
+  the scope and binoculars at 1360; DF2 Software, Hardware and Windowed at 960x768, 1024x576, 1184x768 and 1792x768
+  (Hardware also 1360 and 2048, Software 2560), the scope and binoculars at 1024x576 and 1792x768. Same vertical
+  framing as 1024x768, more at the sides. An array shrunk back to its old size faults on its guard page at 1360x768.
+  Not seen: DF1's picture-in-picture view, explosions at a custom size.
 - Sound: the mixed output (`W32_AUDIO_DUMP`) has the menu music and the mission sounds.
 - `tests/fuzz_sse.py`: every MMX form of both games matches Unicorn on arm64.
 - `~/Applications/Delta Force.app` and `Delta Force 2.app` launch full screen and quit from the menu.
