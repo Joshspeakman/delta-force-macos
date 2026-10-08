@@ -93,6 +93,59 @@ A run that is killed (a test's timeout) keeps the settings it started with.
 Mac-specific fixes: `prof.c` (the sampling profiler's Darwin context and thread id) and `sims_imports.c` (no
 absolute-time `clock_nanosleep` on macOS: the multimedia timer sleeps until each deadline instead).
 
+## Multiplayer
+
+Both games play TCP/IP games through their own `Netsock.dll` (recompiled): UDP port 3568, a receiving socket bound to
+it and an unbound one for sending, sessions found by a search datagram to an address the player gives. LAN games went
+over IPX through DirectPlay and NovaWorld through NovaLogic's servers and web pages; neither exists here.
+
+**What was added** (`runtime/win32/df_net.c`, hooks in `tools/lift.py` DF_HOOKS 'net'):
+- Netsock's C runtime imports (`msvcrt.c`: fopen/fgets/fprintf, sscanf, qsort, time/localtime/asctime,
+  _beginthread, _findfirst…). Without them nothing networked ever ran.
+- **LAN**: each game picks DirectPlay or Netsock in one connection-type switch for hosting and one for joining (DF1
+  0x446910 / 0x470c00, DF2 0x45c370 / 0x408600; types 0 LAN, 1 Internet, 2 modem, 3 serial, 4 NovaWorld). LAN takes
+  the Internet path, searching at the broadcast address.
+- **Several hosts in one search**: the games leave Netsock's 16-byte session instance id zero, and the game lists one
+  session per id, so a broadcast search could list one host only, and Netsock (which sends everything to the address
+  it searched) would join every host that answered. Each hosted session gets an id (at the call of
+  netsock_HostSession), the joiner remembers which address answered with which id, and from netsock_JoinSession on
+  (the chosen session's id) winsock.c sends the game's traffic for the search address to that host only.
+- **NovaWorld**: `p2p_dht.c` is a DHT client (BEP 5, client side only, a read-only node). A NovaWorld host announces
+  its port under a key of the game's own; the Join screen's NovaWorld search (hooks on the join screen and the join
+  state machine, which used to start NovaLogic's browser) goes to 255.255.255.254, which winsock.c sends to every
+  host the DHT names and to the local network. The games' reports to novaworld.net and DF2 Netsock's usage records
+  to 208.231.90.230 are not sent.
+- **Routers**: a host forwards UDP 3568 while it hosts (portmap.c: NAT-PMP, then UPnP). Netsock answers peers at
+  port 3568 from its unbound socket, which a joiner's router would drop; sends now leave from the game port's socket,
+  and go to the port a peer's router actually used when it changed it (`W32_NET_NAT=0` turns this off).
+
+**Verified**:
+- Two copies on one Mac (`W32_NETVIRT`, below), with a local fake DHT:
+  - DF1: Internet, LAN and NovaWorld through the menus;
+  - DF2: LAN and NovaWorld;
+  - two LAN hosts listed separately, and the one chosen joined;
+  - each time, both copies in the mission with two players.
+- Two computers on one network (Mac and the Linux build):
+  - DF1 Internet by address;
+  - DF2 NovaWorld through a fake DHT on the Mac;
+  - in both games, the Linux copy joined the Mac's game.
+  The Linux machine's firewall (ufw) drops the LAN search's answers (they answer a broadcast), so LAN search across
+  those two machines was not checked; with the firewall open it is the same path as the one-computer test.
+- The DHT client against the real DHT, with a throwaway key: announce acknowledged, and found by a second node within
+  seconds.
+
+**Not verified**: a game across the internet between two different networks (both routers' port mapping); more than
+two players; long games.
+
+Switches:
+- `DF_NO_P2P=1`: no DHT.
+- `P2P_DHT_BOOTSTRAP=host:port,...`: other bootstrap nodes (tests).
+- `P2P_DHT_LOG=1`: lookup progress.
+- `DF_NW_BROWSER=1`: NovaLogic's original NovaWorld screens.
+- `W32_NETLOG=1`: every datagram.
+- `W32_NETVIRT=k`: copy k of several on one computer is 127.0.0.k (Netsock answers on a fixed port, so two copies need
+  two addresses). Use different k for every copy, including other testers' on the same machine.
+
 ## Known gaps
 
 - Intro videos: DF2's `DF2INTRO.BIK` is skipped (no Bink decoder here; the game moves on). DF1 opens `INTRO.KDV`
@@ -103,7 +156,6 @@ absolute-time `clock_nanosleep` on macOS: the multimedia timer sleeps until each
   in 0x497d20 (SetCursorPos) runs only when captured. Seen in a session that switched to Windowed and in one that
   started in it (check a run really is windowed: StretchDIBits in `W32_TRACE`). Not yet compared with the original
   under Proton; making windowed mode keep the mouse would need a hook at that call.
-- LAN multiplayer: Netsock.dll is recompiled and its imports are implemented, but no game has been hosted or joined.
 - Direct3D mode was compared against the original at a mission start: the terrain and its depth, and the textured,
   alpha-blended snowflakes the hardware driver adds, match; explosions, smoke and other effects have not been looked at.
 - Mouse sensitivity is 1:1 with host pixels; the game's own sensitivity slider applies on top.
@@ -119,6 +171,7 @@ absolute-time `clock_nanosleep` on macOS: the multimedia timer sleeps until each
 | `W32_DDLOG=1` | DirectDraw/Direct3D calls and each distinct draw state |
 | `DF_MOUSELOG=1` | SetCursorPos and posted mouse messages |
 | `W32_TRACE=<file>` | every Windows call |
+| `W32_NETLOG=1`, `W32_NETVIRT=k`, `P2P_DHT_LOG=1` | network: see Multiplayer |
 | `W32_AUDIOLOG=1`, `W32_AUDIO_DUMP=<wav>` | mixer peaks, the mixed output |
 | `tests/fuzz_insn.py`, `tests/fuzz_sse.py` | instruction forms vs Unicorn (`FUZZ_EXE`, `FUZZ_ANALYSIS`) |
 | gdb | lifted code's line numbers are guest addresses: `break x86:<decimal address>` |

@@ -16,8 +16,10 @@ on a copy in the build folder, recompiles that copy, and reads the game's data f
 | Missions: voxel terrain, models, HUD, movement, mouse-look | working (Mac, Linux) | working (Mac, Linux) |
 | Renderers | **16 million colours** and **256 colours** (Settings → Colors), **windowed** | **Full Screen (Software)**, **Full Screen (Hardware)** (Direct3D, `Hw_d3d.dll` recompiled), **Windowed** |
 | Sound and music | working (Mac, Linux) | working (Mac, Linux) |
-| LAN multiplayer (`Netsock.dll`, recompiled) | builds, untested | builds, untested |
-| NovaWorld voice/browser (`Netcomm.dll`, `iBrowse.dll`) | — | not available (stubbed) |
+| LAN games ("LAN (IPX)" in the game, played over TCP/IP) | working (Mac, Linux) | working (Mac, Linux) |
+| Internet games by address ("Internet") | working (Mac, Linux) | — (DF2 has no such option: use NovaWorld) |
+| NovaWorld: a public game list with no server (BitTorrent DHT) | working (Mac, Linux) | working (Mac, Linux) |
+| NovaWorld voice (`Netcomm.dll`) | — | not available (stubbed) |
 | macOS app (`install.sh`) | working (Apple Silicon) | working (Apple Silicon) |
 
 "Working (Linux)" means checked against the original game running under Proton with the same inputs (screenshots
@@ -42,6 +44,20 @@ soldiers and saves go to the data folder (`~/Games/DeltaForceNative`, `~/Games/D
 choose).
 
 Choose the renderer in the game's own Settings screen, as on Windows.
+
+## Multiplayer
+
+Everything is chosen in the game's own multiplayer screens:
+- **LAN (IPX)**: host, or search and join, on the local network. There is no IPX here; it runs over TCP/IP (UDP port
+  3568) and finds games by broadcast.
+- **Internet** (DF1): join by typing the host's address. The host's Host screen shows it ("Your IP").
+- **NovaWorld**: NovaLogic's service is gone. Hosting with NovaWorld lists the game on BitTorrent's public DHT (no
+  server anyone has to run), and on the Join screen NovaWorld → Search lists every game hosted that way, plus the
+  ones on your network. NovaLogic's login and web pages are not used.
+
+A hosted game asks the router to forward UDP 3568 (NAT-PMP or UPnP) while it is hosted. If the router can't, forward
+UDP 3568 to the host by hand. A firewall on the host must let UDP 3568 in (on macOS, allow the app if it asks).
+`DF_NO_P2P=1` keeps games off the DHT (local network only), and `DS_NO_PORTMAP=1` leaves the router alone.
 
 ## Building by hand
 
