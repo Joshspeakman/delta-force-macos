@@ -158,7 +158,7 @@ static uint8_t flash[256]; static uint32_t flash_tick;
 typedef struct { uint32_t a, was, wrote; } Undo;
 static Undo undo[NSLOT * 6 + 4]; static int nundo, in_render;
 static uint64_t tick_t0, last_start, last_end, last_work; static uint32_t last_ticks;
-static int cap_k = 1, cap_votes;  /* a frame every cap_k refreshes (dsr_cap_divide) */
+static int cap_k = 1;            /* a frame every cap_k refreshes (dsr_cap_divide) */
 static uint64_t est_us = 4000;   /* a render's own work (the cap's waits taken out): the second longest of the last 48 */
 static uint64_t works[48]; static int nworks;
 static uint64_t render_t0, render_w0;
@@ -219,6 +219,8 @@ static void tick_starts(void)
     eye_prev = (int32_t)r32(A_EYE);
     if (lg >= 2) { uint32_t p = r32(A_PLAYER); fprintf(stderr, "dff: tick %u starts: yaw %08x pitch %08x pos %08x %08x %08x\n", ticks + 1, r32(p + 0x30), r32(p + 0x34), r32(p + 0x24), r32(p + 0x28), r32(p + 0x2c)); }
     snap_valid = 1; ticks++; st.ticks++;
+    { static long jump = -1; static double units; if (jump < 0) { const char *e = getenv("DF_FRAME_JUMP"); jump = e && lg >= 2 ? atol(e) : 0; units = e && strchr(e, ':') ? atof(strchr(e, ':') + 1) : 100; }
+      if (jump && ticks == (uint32_t)jump) { uint32_t p = r32(A_PLAYER); wr32(p + 0x24, r32(p + 0x24) + (uint32_t)(int32_t)(units * 65536)); fprintf(stderr, "dff: test: the player moved %.1f units\n", units); } }
     m_known = 0; m_dyaw = m_dpitch = 0;
 }
 
@@ -305,11 +307,20 @@ static int render_starts(Ctx *c)  /* 1: not drawn now */
         for (uint32_t j = 0; j < a->cap; j++, k++) {
             Slot *s = &snap[k]; if (!s->ok) continue;
             uint32_t e = a->base + j * STRIDE;
-            if (j >= n || !drawn(a, e) || r32(e) != s->id0 || r32(e + 0x10) != s->id10 || ((r32(e + O_FLAGS) ^ s->flags) & 4)) { st.snaps++; continue; }
+            if (j >= n || !drawn(a, e) || r32(e) != s->id0 || r32(e + 0x10) != s->id10 || ((r32(e + O_FLAGS) ^ s->flags) & 4)) {
+                st.snaps++;
+                if (lg >= 2 && st.snaps < 4) fprintf(stderr, "dff: tick %u: array %d slot %u snaps (drawn %d, +0 %08x was %08x, +0x10 %08x was %08x, flags %08x was %08x)\n",
+                                                     ticks, i, j, j < n && drawn(a, e), r32(e), s->id0, r32(e + 0x10), s->id10, r32(e + O_FLAGS), s->flags);
+                continue;
+            }
             int32_t v[6]; for (int q = 0; q < 6; q++) v[q] = (int32_t)r32(e + 0x24 + 4 * q);
             int32_t d[3], m = 0; for (int q = 0; q < 3; q++) { d[q] = v[q] - s->v[q]; if (iabs(d[q]) > m) m = iabs(d[q]); }
             /* a jump: more than 64 units in one tick, or above 4 units and over four times the step before */
-            if (m > 0x400000 || (m > 0x40000 && s->stepped && m > 4 * s->last + 0x40000)) { st.jumps++; continue; }
+            if (m > 0x400000 || (m > 0x40000 && s->stepped && m > 4 * s->last + 0x40000)) {
+                st.jumps++;
+                if (lg >= 2) fprintf(stderr, "dff: tick %u: array %d slot %u jumped %.2f units (the tick before: %.2f)\n", ticks, i, j, m / 65536.0, s->stepped ? s->last / 65536.0 : -1.0);
+                continue;
+            }
             if (back > 0) for (int q = 0; q < 3; q++) put(e + 0x24 + 4 * q, (uint32_t)v[q], (uint32_t)lerp_back(v[q], d[q], back));
             for (int q = 3; q < 6; q++) {
                 int32_t da = (int32_t)((uint32_t)v[q] - (uint32_t)s->v[q]);
@@ -346,18 +357,26 @@ static void render_ends(void)
     if (w > 20000) w = 20000;
     works[nworks++ % 48] = w;
     { uint64_t a = 0, b = 0; for (int k = 0; k < 48 && k < nworks; k++) { if (works[k] > a) { b = a; a = works[k]; } else if (works[k] > b) b = works[k]; } est_us = b ? b : a; }
-    /* A render longer than a refresh (DF2's Direct3D driver here, large modes): a frame every second refresh (or
-     * third...), each shown as long as the next, rather than each as soon as it is done, unevenly. Back to every
-     * refresh once a render fits with room. Half a second to slow down, two seconds to speed up. */
+    /* Renders that miss their refresh (DF2's Direct3D driver here, heavy views, large modes): a frame every second
+     * refresh (or third...), each shown as long as the next, rather than each as soon as it is done, unevenly. That
+     * when more than a tenth of a second's frames came late and a render (nearly) fills the period (lateness from
+     * elsewhere, a busy machine, is no reason); back when renders fit the shorter period with room for two seconds. */
+    static uint64_t win_t0; static int win_n, win_late, win_fit;
     double hz = dsr_display_hz;
     if (hz >= 20) {
-        double p = 1e6 / hz, need = (double)est_us + 500; int want = cap_k;
-        if (need > cap_k * p) want = (int)ceil(need / p); else if (cap_k > 1 && need < (cap_k - 1) * p * 0.95) want = cap_k - 1;
-        if (want > 4) want = 4;
-        if (want == cap_k) cap_votes = 0;
-        else if (++cap_votes > (want > cap_k ? hz / cap_k / 2 : 2 * hz / cap_k)) {
-            cap_k = want; cap_votes = 0; dsr_cap_divide(cap_k);
-            fprintf(stderr, "df: a frame every %d refreshes (a render takes %.1f ms)\n", cap_k, est_us / 1000.0);
+        double p = 1e6 / hz;
+        win_n++; win_late += !waited;
+        if (!win_t0) win_t0 = t;
+        if (t - win_t0 >= 1000000) {
+            int want = cap_k;
+            if (win_late * 10 > win_n && (double)est_us + 500 > cap_k * p * 0.9 && cap_k < 4) want = cap_k + 1;   /* late for want of time */
+            else if (cap_k > 1 && (double)est_us + 500 < (cap_k - 1) * p * 0.85) { if (++win_fit >= 2) want = cap_k - 1; }
+            else win_fit = 0;
+            if (want != cap_k) {
+                cap_k = want; win_fit = 0; dsr_cap_divide(cap_k);
+                fprintf(stderr, "df: a frame every %d refreshes (%d of %d frames late; a render takes %.1f ms)\n", cap_k, win_late, win_n, est_us / 1000.0);
+            }
+            win_t0 = t; win_n = win_late = 0;
         }
     }
 }
