@@ -66,7 +66,11 @@ if [ -n "$U_REPO" ] && [ -n "$U_BUILT" ] && git -C "$U_REPO" remote get-url orig
 set -euo pipefail
 REPO=$(printf '%q' "$U_REPO"); BRANCH=$U_BRANCH; W="\$REPO/build/stable"
 export GIT_TERMINAL_PROMPT=0                              # never wait for a password prompt
-if [ "\${1:-}" = --check ]; then git -C "\$REPO" ls-remote origin "refs/heads/\$BRANCH" | cut -f1; exit 0; fi
+if [ "\${1:-}" = --check ]; then                          # GitHub's newest, unless this app already has it: a build
+  R="\$(git -C "\$REPO" ls-remote origin "refs/heads/\$BRANCH" | cut -f1)"   # from a newer local commit is never offered an older one
+  if [ -n "\$R" ] && git -C "\$REPO" merge-base --is-ancestor "\$R" $U_BUILT 2>/dev/null; then echo $U_BUILT; else echo "\$R"; fi
+  exit 0
+fi
 echo "== fetching \$BRANCH from GitHub"
 git -C "\$REPO" fetch -q origin "\$BRANCH"
 git -C "\$REPO" worktree prune

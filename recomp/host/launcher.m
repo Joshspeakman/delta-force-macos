@@ -371,15 +371,16 @@ static const uint8_t modern_keys[KEYS_N] = {
     0x41,0x44,0x57,0x53,0x5A,0x43,0x58,0x20,0x11,0x51,0x10,0x08,0x42,0x31,0x32,0x33,0x34,0x35,0x36,0x37,0x38,0x47,0x30,0xBB,0xBD,0x54,0x59,0xBC,0x56,0x2E,
     0x48,0x52,0x68,0x62,0x66,0x64,0x4A,0x4F,0x23,0x46,0x09,0x4D,0xC0,0x39,0x45,0x24};
 #endif
-/* the files holding key maps, each with the offsets of its maps: (name, offsets) */
+/* the files holding key maps, each with its maps: (name, map offsets, the matching soldier-name offsets, -1 for none) */
 static NSArray<NSArray *> *keymap_files(void)
 {
 #ifdef DF2_EDITION
-    return @[@[@"df2plyrs.sav", @[@(8 + 0x2e0), @(8 + 0x6e8 + 0x2e0), @(8 + 2 * 0x6e8 + 0x2e0), @(8 + 3 * 0x6e8 + 0x2e0), @(8 + 4 * 0x6e8 + 0x2e0)]],
-             @[@"Df2.dfk", @[@0]]];
+    NSMutableArray *maps = [NSMutableArray array], *names = [NSMutableArray array];
+    for (int r = 0; r < 5; r++) { [maps addObject:@(8 + r * 0x6e8 + 0x2e0)]; [names addObject:@(8 + r * 0x6e8 + 4)]; }
+    return @[@[@"df2plyrs.sav", maps, names], @[@"Df2.dfk", @[@0], @[@-1]]];
 #else
     NSMutableArray *a = [NSMutableArray array];
-    for (int k = 1; k <= 9; k++) [a addObject:@[[NSString stringWithFormat:@"player%02d.ply", k], @[@0x6a0]]];
+    for (int k = 1; k <= 9; k++) [a addObject:@[[NSString stringWithFormat:@"player%02d.ply", k], @[@0x6a0], @[@4]]];
     return a;
 #endif
 }
@@ -398,22 +399,33 @@ static int keymap_kind(const uint8_t *p)    /* 1 Classic, 2 Modern, 0 something 
     for (int k = 0; k < KEYS_N; k++) { uint32_t v; memcpy(&v, p + 12 * k, 4); if (v != classic_keys[k]) c = 0; if (v != modern_keys[k]) m = 0; }
     return c ? 1 : m ? 2 : 0;
 }
-/* the soldiers' maps now: "classic", "modern" or "custom" */
+/* a soldier someone made: a name, and not the empty slot's "New Operative" (Delta Force 2 leaves an empty slot blank) */
+static BOOL soldier_named(NSData *d, NSInteger at)
+{
+    if (at < 0 || at + 16 > (NSInteger)d.length) return NO;
+    const char *n = (const char *)d.bytes + at; char name[17] = {0}; memcpy(name, n, 16);
+    return name[0] && strcasecmp(name, "New Operative");
+}
+/* the named soldiers' maps now: "classic", "modern", "custom" (any of them changed in the game), or nil when they are
+ * a mix of the two presets (or there are none) */
 static NSString *controls_state(NSString *game, NSString *data)
 {
-    int seen = 0, all = 3;    /* bit 0: all Classic so far, bit 1: all Modern so far */
+    int c = 0, m = 0, other = 0;
     for (NSArray *f in keymap_files()) {
         NSString *src = keymap_source(game, data, f[0]); NSData *d = src ? [NSData dataWithContentsOfFile:src] : nil; if (!d) continue;
-        for (NSNumber *o in f[1]) {
-            if (o.unsignedIntegerValue + 12 * KEYS_N > d.length) continue;
-            int k = keymap_kind((const uint8_t *)d.bytes + o.unsignedIntegerValue); seen++;
-            all &= k == 1 ? 1 : k == 2 ? 2 : 0;
+        NSArray *maps = f[1], *names = f[2];
+        for (NSUInteger i = 0; i < maps.count; i++) {
+            NSUInteger o = [maps[i] unsignedIntegerValue];
+            if (o + 12 * KEYS_N > d.length || !soldier_named(d, [names[i] integerValue])) continue;
+            int k = keymap_kind((const uint8_t *)d.bytes + o); if (k == 1) c++; else if (k == 2) m++; else other++;
         }
     }
-    return !seen || all == 1 || all == 3 ? @"classic" : all == 2 ? @"modern" : @"custom";
+    return other ? @"custom" : c && !m ? @"classic" : m && !c ? @"modern" : nil;
 }
-/* writes a preset into every map (in the data folder's copy); returns NO if a file couldn't be written */
-static BOOL controls_apply(NSString *game, NSString *data, BOOL modern)
+/* writes a preset into the maps (in the data folder's copy): every map when `all` (the player picked the layout just
+ * now), else the empty slots' and the ones still on a preset (a soldier made since gets the layout; one changed in the
+ * game's Remap screen keeps its keys). Only changed files are written; returns NO if one couldn't be. */
+static BOOL controls_apply(NSString *game, NSString *data, BOOL modern, BOOL all)
 {
     NSFileManager *fm = NSFileManager.defaultManager; NSString *ovd = [data stringByAppendingPathComponent:@"game"], *bk = [data stringByAppendingPathComponent:@"backup/controls"];
     BOOL first = ![fm fileExistsAtPath:bk], ok = YES;
@@ -422,12 +434,15 @@ static BOOL controls_apply(NSString *game, NSString *data, BOOL modern)
     const uint8_t *keys = modern ? modern_keys : classic_keys;
     for (NSArray *f in keymap_files()) {
         NSString *src = keymap_source(game, data, f[0]); NSMutableData *d = src ? [NSMutableData dataWithContentsOfFile:src] : nil; if (!d) continue;
-        if (first) [d writeToFile:[bk stringByAppendingPathComponent:f[0]] atomically:YES];   /* the maps as they were, once */
-        for (NSNumber *o in f[1]) {
-            if (o.unsignedIntegerValue + 12 * KEYS_N > d.length) continue;
-            uint8_t *p = (uint8_t *)d.mutableBytes + o.unsignedIntegerValue;
+        NSData *was = [d copy]; NSArray *maps = f[1], *names = f[2];
+        for (NSUInteger i = 0; i < maps.count; i++) {
+            NSUInteger o = [maps[i] unsignedIntegerValue]; if (o + 12 * KEYS_N > d.length) continue;
+            uint8_t *p = (uint8_t *)d.mutableBytes + o;
+            if (!all && soldier_named(d, [names[i] integerValue]) && !keymap_kind(p)) continue;   /* the player's own keys */
             for (int k = 0; k < KEYS_N; k++) { uint32_t v = keys[k]; memcpy(p + 12 * k, &v, 4); }
         }
+        if ([d isEqualToData:was]) continue;
+        if (first) [was writeToFile:[bk stringByAppendingPathComponent:f[0]] atomically:YES];   /* the maps as they were, once */
         if (![d writeToFile:[ovd stringByAppendingPathComponent:f[0]] atomically:YES]) ok = NO;
     }
     return ok;
@@ -588,7 +603,7 @@ int ds_launcher_run(const char *game_dir, const char *data_dir)
     fps.title = @"Frame Rate"; fps.choices = framerate_choices(); fps.index = index_of(fps.choices, saved[@"frameRate"], 0);
     nova.title = @"NovaWorld"; nova.choices = novaworld_choices(); nova.index = index_of(nova.choices, saved[@"novaWorld"], 0);
     router.title = @"Router"; router.choices = router_choices(); router.index = index_of(router.choices, saved[@"router"], 0);
-    NSString *keys = controls_state(game, data);           /* what the soldiers' key maps are now */
+    NSString *keys = controls_state(game, data) ?: saved[@"controls"] ?: @"classic";   /* what the soldiers' key maps are now */
     controls.title = @"Controls"; controls.choices = controls_choices([keys isEqualToString:@"custom"]); controls.index = index_of(controls.choices, keys, 0);
     NSString *(^val)(DSRow *) = ^NSString *(DSRow *r) { return r.choices[r.index][@"value"]; };
     const char *shot = getenv("DS_LAUNCHER_SHOT");
@@ -666,8 +681,8 @@ int ds_launcher_run(const char *game_dir, const char *data_dir)
         NSBitmapImageRep *rep = [v bitmapImageRepForCachingDisplayInRect:v.bounds]; [v cacheDisplayInRect:v.bounds toBitmapImageRep:rep];
         [[rep representationUsingType:NSBitmapImageFileTypePNG properties:@{}] writeToFile:@(shot) atomically:YES];
         if (getenv("DS_LAUNCHER_APPLY")) {          /* development: the Controls choice written as Play would */
-            NSString *c = val(controls); if (![c isEqualToString:@"custom"] && ![c isEqualToString:keys]) controls_apply(game, data, [c isEqualToString:@"modern"]);
-            printf("controls: %s -> %s\n", keys.UTF8String, controls_state(game, data).UTF8String);
+            NSString *c = val(controls); if (![c isEqualToString:@"custom"]) controls_apply(game, data, [c isEqualToString:@"modern"], ![c isEqualToString:keys]);
+            printf("controls: %s -> %s\n", keys.UTF8String, (controls_state(game, data) ?: @"mixed").UTF8String);
         }
         return 0;
     }
@@ -687,10 +702,10 @@ int ds_launcher_run(const char *game_dir, const char *data_dir)
     [w orderOut:nil];
     if (!result) return 0;
     NSString *cv = val(controls);
-    if (![cv isEqualToString:@"custom"] && ![cv isEqualToString:keys] && !controls_apply(game, data, [cv isEqualToString:@"modern"])) {
+    if (![cv isEqualToString:@"custom"] && !controls_apply(game, data, [cv isEqualToString:@"modern"], ![cv isEqualToString:keys])) {
         NSAlert *a = [NSAlert new]; a.messageText = @"The controls couldn't be changed";
         a.informativeText = [NSString stringWithFormat:@"The soldiers' key maps in %@ couldn't be written. The game starts with the keys it had.", [data stringByAppendingPathComponent:@"game"]];
-        [a runModal]; cv = controls_state(game, data);
+        [a runModal]; cv = controls_state(game, data) ?: keys;
     }
     [@{@"screenShape": val(shape), @"frameRate": val(fps), @"novaWorld": val(nova), @"router": val(router), @"controls": cv} writeToFile:plistPath atomically:YES];
     apply(val(shape), val(fps), val(nova), val(router), cv);
