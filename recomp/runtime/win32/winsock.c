@@ -320,7 +320,7 @@ IMPL(wsock32, ord1)                                     /* accept(s, addr, len*)
     if (n < 0) { w32_set_last_error(c, wsa_err(errno)); RET(INVALID_SOCKET_, 3); }
     socket_no_sigpipe(n); fcntl(n, F_SETFD, FD_CLOEXEC);
     pthread_mutex_lock(&s_lock); int k = 0; while (k < MAXS && S[k].fd) k++;
-    if (k < MAXS) { S[k].fd = n + 1; S[k].nb = 0; S[k].connecting = 0; }
+    if (k < MAXS) { S[k].fd = n + 1; S[k].nb = 0; S[k].connecting = 0; S[k].bound = 1; }   /* the OS bound it (a reused slot kept the old flag) */
     pthread_mutex_unlock(&s_lock);
     if (k == MAXS) { close(n); w32_set_last_error(c, 10024); RET(INVALID_SOCKET_, 3); }
     fcntl(n, F_SETFL, fcntl(n, F_GETFL) & ~O_NONBLOCK);  /* Windows: the new socket starts blocking */
