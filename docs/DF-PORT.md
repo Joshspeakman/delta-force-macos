@@ -394,3 +394,17 @@ uncapped FPS improvement. Movement and mouse-look remain functional; the 16 ms s
 A 4 MB hardware-mode stress run also checks Peru, movement, mouse-look and the scope, with zero reported dropped
 draws and normal exit. Quiet portions reach 120 FPS; the existing adaptive refresh divider can reduce cadence
 when rendering misses deadlines. No further visual shader changes were justified by these captured scenes.
+
+DF2's shipped Steam executable also matches the original-game reference. At 640x480, Six of One reproduces the software
+and original Direct3D terrain, weapon, HUD, sky gradient and falling snow; hardware retains its filtered weapon
+and terrain occlusion. Software and hardware starting captures have 98.95% and 96.03% exact RGB pixels,
+respectively; snow phase varies, so these are scene checks rather than proof of every frame or mission. Walking,
+mouse-look and picture-in-picture scope pass. A genuine 4 MB hardware stress run exceeds 1.2 million draws
+with zero reported drops and normal exit. Explosions/smoke and original windowed mouse behavior remain unverified.
+
+Both DF2 software builds hold 120 submitted/on-screen FPS in the checked quiet intervals. One 15-second paired
+process-CPU observation falls from 96.56% to 93.18% of one core; this small difference does not establish a
+whole-game speedup. The installed update with the normal 256 MB ring and the user's 800x600 hardware setting
+runs about 63–64 FPS in this scene (GPU about 0.5 ms, logged render cost about 15.8 ms), limited by CPU/host work.
+The small-ring 640x480 hardware stress runs around 94–96 FPS, and the scope around 78; neither establishes
+universal 120 FPS. The installed smoke exits normally and all 11 production data files remain unchanged.
