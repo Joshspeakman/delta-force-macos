@@ -5,6 +5,7 @@
  * read and written at its 32-bit Windows offsets in guest memory; lockable memory (surfaces, vertex buffers) lives in
  * guest memory because the game writes through the pointers Lock returns. */
 #include "w32.h"
+#include "frame_wait.h"
 #include "dsr_producer.h"
 #include <stdarg.h>
 #include "platform.h"
@@ -246,7 +247,7 @@ static void cmd_cap_wait(void)
     }
     uint64_t period = (uint64_t)(cap_period_ms * 1000);
     if (!deadline) deadline = t;
-    if (t < deadline) { uint64_t t0 = t; while ((t = now_us()) < deadline) { if (deadline - t > 2000) usleep(1000); } dsr_cap_waited_us += t - t0; }
+    if (t < deadline) { uint64_t t0 = t; ds_frame_wait_until(deadline, now_us); t = now_us(); dsr_cap_waited_us += t - t0; }
     else if (t - deadline > period) deadline = t;
     deadline += period;
     released = now_us();

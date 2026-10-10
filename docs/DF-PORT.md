@@ -363,3 +363,34 @@ Switches:
 Reference runs: the unwrapped exe (`recomp/work/<game>/Df*.exe`) in a folder of links to the Steam files, under
 Proton in a headless gamescope (`gamescope --backend headless -W 1024 -H 768 -w 640 -h 480`), XTEST input from
 python-xlib, screenshots with `gamescopectl screenshot`.
+
+
+## Mac visual and performance review (2026-10-10)
+
+The [original-game reference](https://github.com/Joshspeakman/delta-force-macos/issues/1) uses original Steam executables
+under Proton 11.0 on an RTX 3080 Ti, not native Windows. DF1's shipped executable hash matches. At 640x480,
+gamma 128 and Turbo Off, Peru/Insurrection reproduces the original terrain, trees, weapon and HUD in both
+16-million and 256-color modes. The 16M starting capture has 99.17% exactly matching RGB pixels; nearly all
+remaining differences lie in the sky/horizon, whose sampling/phase is already qualified above. This is coverage
+of the captured view, not proof of every mission. Hardware is the port's additional mode, with no original DF1
+hardware-mode reference.
+
+The renderer's fallback white buffer now provides all 16 source bytes Metal copies. Draws reserve their entire
+upload range before setting encoder state: previously fan indices or program constants could wrap the ring and
+replace the encoder after its pipeline was bound. The ring also grows for an oversized allocation or complete
+draw, after outstanding GPU work finishes. Default capacity remains 256 MB; `DSR_RINGMB=4` is a development
+stress option, with accepted values 4–256 MB. `recomp/tests/metal_regressions.sh` needs no game assets and checks
+source bounds, oversized allocation, whole-draw reservation, GPU copy, wrap, and actual rendered pixels for
+fixed-function and program draws at a ring boundary under ASAN/UBSAN. The old initializer and both old draw
+paths fail their regressions before an invalid GPU draw is submitted.
+
+The frame limiter uses short sleeps before its final brief spin. The isolated wait benchmark reports CPU cost
+at 60 Hz falling from 1.276 to 0.159 ms/frame, and at 120 Hz from 0.908 to 0.082. Scheduling lateness varies;
+this does not establish tighter deadlines. In the checked Peru software view both builds sustain 120 FPS,
+including drawable presentation measurements. One 15-second observation of total process CPU falls from
+78.75% to 66.41% of one core; that supports lower pacing overhead, not a repeated full-game benchmark or an
+uncapped FPS improvement. Movement and mouse-look remain functional; the 16 ms simulation tick is unchanged.
+
+A 4 MB hardware-mode stress run also checks Peru, movement, mouse-look and the scope, with zero reported dropped
+draws and normal exit. Quiet portions reach 120 FPS; the existing adaptive refresh divider can reduce cadence
+when rendering misses deadlines. No further visual shader changes were justified by these captured scenes.

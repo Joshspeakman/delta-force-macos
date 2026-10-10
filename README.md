@@ -62,6 +62,9 @@ changed there shows as *Custom* and is left alone.
 
 Choose the renderer and resolution in the game's own Settings screen, as on Windows.
 
+For nightly updates, install with `--branch nightly` (default: `main`). The installer builds the current checkout;
+the app's Updates row follows the selected branch and retains it when rebuilding.
+
 ## Multiplayer
 
 Everything is chosen in the game's own multiplayer screens:
