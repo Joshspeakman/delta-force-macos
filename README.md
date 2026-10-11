@@ -13,6 +13,9 @@ read and has to stay where it is.
 
 ## State
 
+**Beta 1.** See the [release notes](https://github.com/Joshspeakman/delta-force-macos/releases/tag/beta-1)
+for installation instructions and known issues.
+
 | | Delta Force (Steam 32620) | Delta Force 2 (Steam 32630) |
 |---|---|---|
 | Menus, soldier, campaign/quick missions, briefing | working (Mac, Linux) | working (Mac, Linux) |
