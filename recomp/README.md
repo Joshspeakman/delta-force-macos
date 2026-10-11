@@ -9,46 +9,32 @@ games and what was checked on each platform: [docs/DF-PORT.md](../docs/DF-PORT.m
 recomp/build_df.sh "/path/to/Delta Force 2"      # -> recomp/work/df2 (a minute or two)
 ```
 
-The sections below describe the recompiler as inherited from the Dungeon Siege II port (its execution model, flags,
-x87, indirect calls and test harnesses apply unchanged); the numbers in them are Dungeon Siege II's.
+`build_df.sh` checks the executable's SHA-256 (Steam builds 19311 and 19312 only), undoes SteamStub 2.1 on a copy
+(`tools/steamstub21.py`), analyses and lifts it, does the same for `Netsock.dll`, `Cmprssh0.dll` (rebased to
+0x11000000) and, for Delta Force 2, `Hw_d3d.dll` (0x12000000), compiles everything in parallel and links it with the
+runtime (`tools/build_runtime.sh`: Metal on macOS, SDL/OpenGL on Linux). `DF_RELINK=1` keeps the lifted objects and
+rebuilds only the runtime and host.
+
+The recompiler (analysis, lifter, execution model, x87, indirect calls, test harnesses) was inherited from the
+Dungeon Siege II port and works unchanged here; the runtime still carries modules of the earlier ports (Direct3D 9,
+HLSL, Miles, DirectPlay 8) that these games don't load.
 
 ## Status
 
-| Step | State |
+| Part | State |
 |---|---|
-| Analysis (`tools/analyze.py`) | 85,833 functions, 97.1% of `.text`; 479 jump tables resolved, 73 bounded heuristically |
-| Lifter (`tools/lift.py`), runtime core (`runtime/`) | the whole executable and its DLLs compile and link (89,293 functions) |
-| Win32 layer (`runtime/win32`): loader, memory, heaps, threads, SEH, files, registry, USER32 (with timers), GDI, DbgHelp, WSOCK32 (`winsock.c`) | working |
-| Direct3D 9 (`d3d9.c`, `d3d9_fmt.c`) on the Metal renderer (`../src/renderer`), D3DX textures (`d3dx9.c`) | working: fixed function, and the game's HLSL effects compiled to Metal (`hlsl.c`, `d3dx9_fx.c`) |
-| Miles 6.6g (`mss32.dll` and its providers) and Bink, recompiled from the game folder; DirectSound over Core Audio | working |
-| App bundle, installer (`../install.sh`), launch window (`host/launcher.m`) | working |
-| Multiplayer (DirectPlay 8, GameSpy lobby on OpenSpy) | switched back on: the lobby works with an original CD key; hosting and joining untested (`../docs/MULTIPLAYER.md`) |
-
-The recompiled game runs without Wine or Rosetta: intro, menus, new hero, the campaign, saving and loading.
+| Analysis and lifting (`tools/analyze.py`, `tools/lift.py`) | both executables and their DLLs; Watcom C (DF1) and MSVC 5 + MASM (DF2) specifics, self-modifying span renderers (`smc_scan`, code slots): see [docs/DF-PORT.md](../docs/DF-PORT.md) |
+| Game-specific hooks (`tools/lift.py` `DF_HOOKS` / `DF_OVERRIDES`, `runtime/win32/df_hooks.c`) | one table and one runtime module per feature: `df_net.c` (multiplayer, NovaWorld), `df_frame.c` (high frame rates), `df_res.c` (screen shapes; arrays moved with `DF_MOVED`), `df_hw.c` (DF1 Full Screen Hardware) |
+| DirectDraw and Direct3D 6 (`runtime/win32/ddraw_pal.c`, from the Diablo II port) on the renderer in `../src/renderer` | 8/16/32-bit surfaces, palettes, DF2's Direct3D driver, CPU-written depth buffers (`DSR_DEPTH_UPLOAD`) |
+| Sound | the games' streaming DirectSound buffer on Core Audio (SDL on Linux); DF2's MSACM ADPCM decoded in `df_imports.c` |
+| Network | `Netsock.dll` recompiled over `winsock.c` (UDP 3568); `p2p_dht.c` (the NovaWorld list), `portmap.c` (NAT-PMP, UPnP) |
+| Host (`host/main.m`, `host/linux.c`), launch window (`host/launcher.m`), sandbox | working on macOS (Apple Silicon) and Linux |
 
 Test mode: `DS_TEST=1` (background window, no mouse capture, no launch window), `W32_AUDIO_MUTE=1`,
-`DS_SCRIPT="@20:click:402,264;@30:shot:/tmp/a.png"` (scripted input in the game's display-mode coordinates; also
-`move`, `rclick`, `press`, `key`, `type`), `DS_RESOLUTION=WxH`. Logs: `D3D9_LOG=1|2` (Direct3D calls), `D3D9_FPS=1`,
-`W32_TRACE=<file>` (every Windows call), `W32_SEHLOG=1` (exceptions and the SEH chain), `W32_VMLOG=1`,
-`W32_REGLOG=1` (registry keys not found), `W32_AUDIOLOG=1`. Crash and hang reports go to `<data>/CrashReports`.
-
-Shader effects (`runtime/win32/hlsl.c`, `d3dx9_fx.c`; the game's Options → Video → Shaders, saved as `shaders = ...` in
-`Save/prefs.gas`): `DS2_SHADERS=0` turns them off (the Radeon 8500 identity, fixed function only). Development:
-`FX_PARAMLOG=1` (each parameter's first and first non-zero value), `FX_FOGLOG=1` (fog parameter changes),
-`FX_DUMP=n` (every parameter at the first n passes of each effect), `D3D9_TEXLOG=n` (texture binding during effect
-passes), `HLSL_MAGENTA=1` (effect pixels drawn magenta), `DSR_FXPATCH="old=>new||old=>new"` (text replaced in every
-effect program's Metal before compiling), `DSR_FXTEXLOG=n` (fog, alpha and textures at effect draws), `DSR_RTLOG=n`
-(render target changes and clears), `DSR_SHOWSURF=<surface id>` (that surface drawn in the screen's corner),
-`DSR_GLOWLOG=1` (draws into and out of effect render targets, which are shown in the screen's corner),
-`D3D9_FXSTATELOG=1` (states the game changes between an effect's Begin and End that the effect doesn't own).
-`D3D9_STATELOG=1` (each render and stage state value the game uses, once). `HLSL_DUMP=<technique>` prints an effect's
-source.
-
-Native hot loops (`runtime/win32/native.c`, entered through `tools/lift.py` HOOKS and OVERRIDES): the vertex lighting
-of directional lights and the terrain's 3x3 vertex transform, bit-identical to the original. `DS2_NATIVE=0` runs the
-recompiled original instead, `DS2_NATIVE_CHECK=1` runs both and reports any difference, `DS2_NATIVE_PROF=1` prints
-the lighting loop's time. `DSR_CAPLOG=1` prints the game's work per frame that the automatic frame cadence (120/60) is
-chosen from.
+`DS_SCRIPT=...` or `DS_CMDFILE=<file>` (scripted input in the game's display-mode coordinates), `DS_RESOLUTION=WxH`.
+Logs: `W32_TRACE=<file>` (every Windows call), `W32_SEHLOG=1` (exceptions and the SEH chain), `W32_REGLOG=1`,
+`W32_AUDIOLOG=1`, `W32_DDLOG=1`, `W32_NETLOG=1`. The Delta Force switches (`DF_*`) are listed in
+[docs/DF-PORT.md](../docs/DF-PORT.md#tools-and-switches). Crash and hang reports go to `<data>/CrashReports`.
 
 ## Execution model
 
@@ -59,8 +45,8 @@ chosen from.
   original reads them), so calling conventions, `this` pointers and stack-walking code behave as before.
 - **Flags:** lazy — flag-setting instructions record their operands; consumers (`jcc`, `setcc`, `adc`, `sahf` …)
   compute only the flags they need.
-- **x87:** eight doubles + TOP + control/status words, the precision model this game was measured to run with under
-  Rosetta: double arithmetic, float rounding at 32-bit stores, `fist(p)` honouring the rounding
+- **x87:** eight doubles + TOP + control/status words, the precision model Dungeon Siege II was measured to run with
+  under Rosetta: double arithmetic, float rounding at 32-bit stores, `fist(p)` honouring the rounding
   mode. x87 register forms are decoded from the opcode bytes (Intel semantics), not from disassembler text.
 - **Indirect calls/jumps:** an address → function table; jump tables become `switch` statements; imports are dispatched
   through `rt_import` (IAT slots hold thunk addresses, so a call through a register still lands there).
@@ -69,9 +55,10 @@ chosen from.
 ## Verification and known gaps
 
 The instruction-level harness (`tests/harness.py`, `tests/fuzz_insn.py`, `tests/test_slice.py`) comes from the
-Dungeon Siege 1 port, where every instruction form the game used was checked bit-for-bit against Unicorn; it has not
-been re-run on DS2's instruction mix yet. DS2 has been checked by playing: menus, hero creation, movies, the opening
-of the campaign, save/load, and a 6-minute random-input soak.
+Dungeon Siege 1 port, where every instruction form the game used was checked bit-for-bit against Unicorn.
+`tests/fuzz_sse.py` passes every MMX form both Delta Force games use (on arm64 too), and `tests/replay.py` runs one
+call through the original x86 and the recompiled code from a snapshot and compares them. The games themselves were
+checked against the originals under Proton: see [docs/DF-PORT.md](../docs/DF-PORT.md).
 
 - **SEH:** access violations and RaiseException go through the game's handlers. First touches of reserved archive
   pages pass over C++ `catch(...)` frames (the game reads archives inside them); C++ catch continuations are not
