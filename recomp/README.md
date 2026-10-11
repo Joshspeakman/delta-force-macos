@@ -6,7 +6,7 @@ everything locally from the user's files. Installing and playing: [README](../RE
 games and what was checked on each platform: [docs/DF-PORT.md](../docs/DF-PORT.md).
 
 ```sh
-recomp/build_df.sh "/path/to/Delta Force 2"      # -> recomp/work/df2 (a minute or two)
+recomp/build_df.sh "/path/to/Delta Force 2"      # -> recomp/work/df2
 ```
 
 `build_df.sh` checks the executable's SHA-256 (Steam builds 19311 and 19312 only), undoes SteamStub 2.1 on a copy

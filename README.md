@@ -39,16 +39,17 @@ into a mission, mouse-look, the mixed sound, and both apps launched from `~/Appl
   them itself; without them the build stops at its first `clang` or `python3`.
 - The first build makes `recomp/.venv` and installs Capstone and Unicorn into it with pip, so it needs the internet
   once. The launch window's art is also downloaded from Steam's store page unless you pass `--no-downloads`.
-- The **Steam, Windows** version of each game you want, exactly as Steam ships it today:
+- The **Steam, Windows** version of each game you want, matching the supported hashes below:
 
   | Game | Steam app | Build | Executable (SHA-256) |
   |---|---|---|---|
-  | Delta Force | 32620 | 19311 | `Df.exe` `307bd0956f9b05f6…` |
-  | Delta Force 2 | 32630 | 19312 | `Df2.exe` `0765acdff5fc7eb0…` |
+  | Delta Force | 32620 | 19311 | `Df.exe` `307bd0956f9b05f690b872b9a2823020a66b42eb22519f6d2418cf6cfe5fd98c` |
+  | Delta Force 2 | 32630 | 19312 | `Df2.exe` `0765acdff5fc7eb077959179b0e980743287fc962b20ccac502dd94f272aa717` |
 
   Any other executable (a disc or another store's version, an older Steam build, a modified exe) is refused with
   `not the supported Steam Df.exe` (or `Df2.exe`).
-- A minute or two of build time per game on a recent Mac.
+- Build time and peak disk use have not been verified for a clean install. Allow room for your game files,
+  generated source and object files, the app, and additional update worktrees; time varies with the Mac.
 
 ## Getting the game files
 
@@ -57,18 +58,23 @@ Force 2 `Hw_d3d.dll`), as Steam installs them. Two ways to get them onto the Mac
 
 - **From a Windows PC:** copy the Steam folders over as they are: `steamapps/common/Delta Force` and
   `steamapps/common/Delta Force 2`.
-- **On the Mac, with SteamCMD:** the games are Windows-only, so the Mac Steam client won't download them, but Valve's
-  command-line client can be told to fetch the Windows depots. Install SteamCMD
-  ([Valve's instructions](https://developer.valvesoftware.com/wiki/SteamCMD#macOS)), then, with your own Steam account:
+- **On the Mac, with SteamCMD (untested download route):** Valve's command-line client can request Windows
+  content. Install it with `brew install --cask steamcmd` ([Homebrew package](https://formulae.brew.sh/cask/steamcmd));
+  the commands below use that package's `steamcmd` wrapper. A manual Valve install uses `./steamcmd.sh` instead.
+  Replace `YOUR_STEAM_USERNAME` with an account that owns the game:
 
   ```sh
   steamcmd +@sSteamCmdForcePlatformType windows +force_install_dir "$HOME/Games/Delta Force" \
-           +login <your Steam user name> +app_update 32620 validate +quit
+           +login "YOUR_STEAM_USERNAME" +app_update 32620 validate +quit
   steamcmd +@sSteamCmdForcePlatformType windows +force_install_dir "$HOME/Games/Delta Force 2" \
-           +login <your Steam user name> +app_update 32630 validate +quit
+           +login "YOUR_STEAM_USERNAME" +app_update 32630 validate +quit
   ```
 
-  `force_install_dir` has to come before `login`. SteamCMD asks for your password and Steam Guard code.
+  Keep `force_install_dir` before `login`. SteamCMD handles the password and Steam Guard prompts.
+  Valve's [macOS download](https://steamcdn-a.akamaihd.net/client/installer/steamcmd_osx.tar.gz), inspected on
+  2026-10-10, contains an Intel (`x86_64`) executable and needs [Rosetta](https://support.apple.com/en-us/102527)
+  on Apple Silicon (`softwareupdate --install-rosetta`). The recompiled games themselves run natively. These
+  game downloads have not been tested here; a successful download must still match the supported hashes.
 
 **The Steam wrapper.** Steam's executables are wrapped in SteamStub 2.1, which hides the program's code until Steam
 starts it. The build removes the wrapper from a **copy** in `recomp/work/<game>` so the code can be read and
@@ -77,6 +83,8 @@ unwrapped copy of your executable (`Contents/Resources/Df.exe` or `Df2.exe`) and
 a build of your copy for your Mac. Steam isn't needed to play.
 
 ## Install
+
+Keep the clone in a path without spaces: the current compile scripts split source paths on whitespace.
 
 ```sh
 git clone https://github.com/Joshspeakman/delta-force-macos.git
@@ -96,7 +104,7 @@ Each run builds and installs one game; which one follows from the folder (`Df.ex
 | `--branch main\|nightly` | The branch the app's **Updates** row follows (default `main`). The installer builds the checkout you run it from, so for the nightly code run `git checkout nightly` first, then `./install.sh --branch nightly ...`. It is the same app either way (there is no separate Nightly app) |
 | `--no-downloads` | Don't download the launch window's art and the icon from Steam's store page: Delta Force then uses its own splash and menu screens, Delta Force 2 its menu screen with the title written over it |
 
-Running `./install.sh` again rebuilds and reinstalls the app; the data folder is kept.
+Running the same `./install.sh --game-dir ...` command again rebuilds and reinstalls the app; the data folder is kept.
 
 **Linux:** the same `install.sh`, with clang, python3 and the SDL2, GLEW, freetype, fontconfig, libsndfile and
 libpng development packages. It installs a launcher in `~/.local/bin` (`delta-force`, `delta-force-2`); there is no
@@ -108,10 +116,11 @@ launch window or updater there.
 |---|---|
 | The app | `~/Applications/Delta Force.app`, `~/Applications/Delta Force 2.app` |
 | The game's data | read from your Steam folder, never written to |
-| Settings (`df.cfg` / `df2.cfg`), soldiers, saves | the data folder, `~/Games/DeltaForceNative` (files the game writes are kept there, in its copy of the game folder) |
+| Settings (`df.cfg` / `df2.cfg`), soldiers, saves | `~/Games/DeltaForceNative/game/` (the writable copy of game-folder files) |
 | The launch window's settings and art | `launcher.plist` and `art/` in the data folder |
 | Your soldiers' original key maps | `backup/controls` in the data folder (saved once, before Controls first changes them) |
-| Log | `DeltaForce.log` (`DeltaForce2.log`) in the data folder; past 5 MB the previous one is kept as `.old.log` |
+| Log | `DeltaForce.log` (`DeltaForce2.log`) in the data folder; at the next launch after it exceeds 5 MB, the previous log is kept as `.old.log` |
+| Update output | `update.log` in the data folder |
 | Crash and hang reports | `CrashReports` in the data folder |
 | Build files | in the clone: `recomp/work/df1`, `recomp/work/df2` (the unwrapped copy and the generated code), `recomp/.venv`, `build/` (the updater's checkouts) |
 
@@ -203,15 +212,16 @@ Mouse-look is 1:1 with screen pixels; the game's sensitivity slider applies on t
 The launch window's **Updates** row asks GitHub, each time it opens, whether the branch the app follows (`main`, or
 `nightly` if installed with `--branch nightly`) has a newer commit than the one the app was built from; a build from a
 newer local commit is never offered an older one. Press it to update: the branch is fetched into a worktree of the
-clone you installed from (`build/stable` or `build/nightly`), the app is rebuilt from your own copy of the game (a few
-minutes, with the same game folder, data folder and options), and the app restarts. Your soldiers, saves and settings
-are kept. If an update fails, the details are in `update.log` in the data folder.
+clone you installed from (`build/stable` or `build/nightly`), the app is rebuilt from your own copy of the game
+(with the same game folder, data folder and options), and offers a Restart button when it finishes.
+Your soldiers, saves and settings are kept. If an update fails, the details are in `update.log` in the data folder.
 
 - `main` is the stable line; `nightly` has the newest, experimental work.
 - Keep the clone where it was when you installed: the updater runs in it. An app installed from a folder that isn't a
   git clone of this repository has no updater. It never asks for a password: "Couldn't check" means GitHub wasn't
   reachable (or git couldn't fetch without asking).
-- From the terminal instead: `git pull` in the clone and run `./install.sh --game-dir ...` again.
+- From the terminal instead: `git pull` in the clone and repeat the original install command, including
+  `--game-dir`, any custom folders, `--branch nightly` and `--no-downloads` if used.
 
 ## Uninstalling
 
@@ -245,11 +255,11 @@ On Linux: `~/.local/bin/delta-force*` and `~/.local/share/delta-force*`. Your St
 
 | Message or symptom | What to do |
 |---|---|
-| `not the supported Steam Df.exe` (`Df2.exe`) | Only the current Steam builds (19311, 19312) are accepted. Let Steam verify the game's files (or run SteamCMD's `app_update ... validate`) and copy the folder again |
+| `not the supported Steam Df.exe` (`Df2.exe`) | Only the supported Steam builds (19311, 19312) are accepted; newer builds may differ. Let Steam verify the game's files (or run SteamCMD's `app_update ... validate`) and copy the folder again |
 | `... has neither Df.exe nor Df2.exe` | `--game-dir` must be the game's own folder (`steamapps/common/Delta Force`), not the Steam library |
 | `missing .../Netsock.dll` (or `Cmprssh0.dll`, `Hw_d3d.dll`) | Copy the whole game folder, not only the executable and archives |
 | `clang: command not found`, `xcrun: error: invalid active developer path` | Install the Xcode command line tools: `xcode-select --install` |
-| `no art for the launch window` / `no icon could be made` | The Steam store page couldn't be reached (or `--no-downloads`); the game itself is unaffected. Run `./install.sh` again later for the art |
+| `no art for the launch window` / `no icon could be made` | The Steam store page couldn't be reached (or `--no-downloads`); the game itself is unaffected. Repeat the original `./install.sh --game-dir ...` command later for the art |
 | The game stopped and an alert offered a report | The report is in `CrashReports` in the data folder (Show Report opens it); a hang you had to force-quit is reported the next time the app opens. The alert currently says "Dungeon Siege" (inherited text); it is about this game. Please attach the report and the log to a [GitHub issue](https://github.com/Joshspeakman/delta-force-macos/issues) |
 | Settings or controls you changed in the game are gone | Leave through the game's Exit Game: the games write their settings only then |
 | No mouse-look | You're in windowed mode (see [Known issues](#known-issues)) |
