@@ -341,6 +341,16 @@ void (*w32_host_pump)(void);           /* backend: turn host events into posted 
  * messages, as on Windows); DispatchMessage calls the TIMERPROC when the timer has one */
 typedef struct Timer { uint32_t tid, hwnd, id, ms, proc; double due; } Timer;
 static Timer timers[64]; static pthread_mutex_t tlock = PTHREAD_MUTEX_INITIALIZER;
+void w32_thread_queue_closed(uint32_t tid)
+{
+    pthread_mutex_lock(&qlock);
+    for (int k = 0; k < MAX_THREADS; k++) if (queues[k].tid == tid) memset(&queues[k], 0, sizeof queues[k]);
+    pthread_mutex_unlock(&qlock);
+    pthread_mutex_lock(&tlock);
+    for (int k = 0; k < 64; k++) if (timers[k].tid == tid) memset(&timers[k], 0, sizeof timers[k]);
+    pthread_mutex_unlock(&tlock);
+}
+
 static double now_ms(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec * 1e3 + t.tv_nsec / 1e6; }
 static int timer_due(Ctx *c, uint32_t out, uint32_t hwnd, uint32_t lo, uint32_t hi, int remove)
 {
@@ -368,7 +378,11 @@ static int peek(Ctx *c, uint32_t out, uint32_t hwnd, uint32_t lo, uint32_t hi, i
         if (hwnd && m->hwnd != hwnd) continue;
         if ((lo || hi) && (m->msg < lo || m->msg > hi)) continue;
         memcpy(GP(out), m, sizeof *m);
-        if (remove) { for (int j = k; j < q->n - 1; j++) q->q[(q->head + j) % 512] = q->q[(q->head + j + 1) % 512]; q->n--; }
+        if (remove) {
+            if (!k) q->head = (q->head + 1) % 512;
+            else for (int j = k; j < q->n - 1; j++) q->q[(q->head + j) % 512] = q->q[(q->head + j + 1) % 512];
+            q->n--;
+        }
         pthread_mutex_unlock(&qlock); return 1;
     }
     if (q->quit) {
@@ -474,12 +488,25 @@ void w32_set_cursor(int x, int y) { pthread_mutex_lock(&cursor_lock); cursor_x =
 /* the same motion, summed and never clamped to the screen: Delta Force's mouse-look takes it from here once a tick, and
  * its renders between ticks look ahead by what the next tick has not taken yet (df_frame.c) */
 int32_t w32_raw_dx, w32_raw_dy;
+/* Keep both axes in one sample. The host feeds look deltas separately from the
+ * scaled menu cursor, so changing render/window size cannot change sensitivity. */
+void w32_raw_mouse_move(int dx, int dy)
+{
+    pthread_mutex_lock(&cursor_lock);
+    w32_raw_dx = (int32_t)((uint32_t)w32_raw_dx + (uint32_t)dx);
+    w32_raw_dy = (int32_t)((uint32_t)w32_raw_dy + (uint32_t)dy);
+    pthread_mutex_unlock(&cursor_lock);
+}
+void w32_raw_mouse_sample(int32_t *dx, int32_t *dy, int consume)
+{
+    pthread_mutex_lock(&cursor_lock);
+    *dx = w32_raw_dx; *dy = w32_raw_dy;
+    if (consume) w32_raw_dx = w32_raw_dy = 0;
+    pthread_mutex_unlock(&cursor_lock);
+}
 #endif
 void w32_move_cursor(int dx, int dy, int w, int h, int *ox, int *oy)
 {
-#ifdef DF_EDITION
-    __atomic_add_fetch(&w32_raw_dx, dx, __ATOMIC_RELAXED); __atomic_add_fetch(&w32_raw_dy, dy, __ATOMIC_RELAXED);
-#endif
     pthread_mutex_lock(&cursor_lock);
 #ifdef DF_EDITION
     if (w < w32_screen_w) w = w32_screen_w; if (h < w32_screen_h) h = w32_screen_h;   /* windowed: the window's centre is in desktop coordinates */

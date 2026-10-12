@@ -99,7 +99,7 @@ static int mouse_look_on(void)    /* the scaler's own gate: full screen, capture
 #define PITCH_LO ((int32_t)0xd0000000)   /* the tick clamps the player's pitch to this range */
 #define PITCH_HI 0x40000000
 
-extern int32_t w32_raw_dx, w32_raw_dy;    /* user32.c */
+void w32_raw_mouse_sample(int32_t *, int32_t *, int); /* user32.c */
 uint64_t dsr_next_present_us(void); void dsr_cap_divide(int k); extern uint64_t dsr_cap_waited_us; extern double dsr_display_hz;   /* ddraw.c */
 
 static uint32_t r32(uint32_t a) { return rt_r32(G_MEM, a); }
@@ -119,7 +119,7 @@ static int32_t iabs(int32_t v) { return v < 0 ? -v : v; }
  * (DF2: a mounted gun) or the game's arithmetic would not produce a turn. */
 static int turn(Ctx *c, int32_t dx, int32_t dy, int32_t *dyaw, int32_t *dpitch)
 {
-    int32_t py = r32(A_INVERT) ? dy : -dy, k;
+    int32_t py = r32(A_INVERT) ? dy : (int32_t)(0u - (uint32_t)dy), k;
 #ifdef DF2_EDITION
     uint32_t gun = r32(0x79a6b8);
     if (gun && r32(0x79a5e0 + 4 * r32(0x79a5d4)) == 0x30 && !(r32(gun + 0x64) & 4) && r32(0x79a6b4)) return 0;   /* commands 0x35..0x38 */
@@ -139,7 +139,7 @@ static int turn(Ctx *c, int32_t dx, int32_t dy, int32_t *dyaw, int32_t *dpitch)
     k = (int32_t)(r32(A_SENS) << 14);
     if (call_guest(c, F_ZOOMED)) k >>= 2;
 #endif
-    *dyaw = -mul16((int32_t)((uint32_t)dx << 16), k); *dpitch = mul16((int32_t)((uint32_t)py << 16), k);
+    *dyaw = (int32_t)(0u - (uint32_t)mul16((int32_t)((uint32_t)dx << 16), k)); *dpitch = mul16((int32_t)((uint32_t)py << 16), k);
     return 1;
 }
 
@@ -227,7 +227,7 @@ static void tick_starts(void)
 /* ---- the scaler has sampled the mouse: the tick's delta from the raw motion */
 static void mouse_sampled(Ctx *c)
 {
-    int32_t rx = __atomic_exchange_n(&w32_raw_dx, 0, __ATOMIC_RELAXED), ry = __atomic_exchange_n(&w32_raw_dy, 0, __ATOMIC_RELAXED);
+    int32_t rx, ry; w32_raw_mouse_sample(&rx, &ry, 1);
     if (!ticks) return;
     /* the motion since the previous tick, if that tick took it too; otherwise (the first tick, or after menus,
      * pauses, the mouse not captured) the game's own reading this once, and what piled up meanwhile is dropped */
@@ -296,7 +296,7 @@ static int render_starts(Ctx *c)  /* 1: not drawn now */
     int look = m_known && mouse_tick == ticks && look_ok && mouse_look_on() && !r32(A_CAM_MODE) && r32(A_CAM_TARGET) == p;
     int32_t lyaw = 0, lpitch = 0;
     if (look) {
-        int32_t px = __atomic_load_n(&w32_raw_dx, __ATOMIC_RELAXED), py = __atomic_load_n(&w32_raw_dy, __ATOMIC_RELAXED);
+        int32_t px, py; w32_raw_mouse_sample(&px, &py, 0);
         if ((px || py) && !turn(c, px, py, &lyaw, &lpitch)) look = 0;
         if (look) st.looks++;
     }
@@ -331,11 +331,11 @@ static int render_starts(Ctx *c)  /* 1: not drawn now */
         }
     }
     if (p) {   /* the player: the mouse's part now, the rest in between */
-        int32_t oy = look ? dyaw - m_dyaw : dyaw, op = look ? dpitch - m_dpitch : dpitch;
+        int32_t oy = look ? (int32_t)((uint32_t)dyaw - (uint32_t)m_dyaw) : dyaw, op = look ? (int32_t)((uint32_t)dpitch - (uint32_t)m_dpitch) : dpitch;
         if (iabs(oy) >= 0x40000000) oy = 0; if (iabs(op) >= 0x40000000) op = 0;
         uint32_t cy = r32(p + 0x30), cp = r32(p + 0x34);
-        int32_t ny = (int32_t)(cy + (uint32_t)lyaw) - (int32_t)lround(back * oy);
-        int32_t np = (int32_t)cp + lpitch - (int32_t)lround(back * op);
+        int32_t ny = (int32_t)(cy + (uint32_t)lyaw - (uint32_t)(int32_t)lround(back * oy));
+        int64_t np = (int64_t)(int32_t)cp + lpitch - (int64_t)lround(back * op);
         if (lpitch > 0 && np > PITCH_HI) np = (int32_t)cp > PITCH_HI ? (int32_t)cp : PITCH_HI;
         if (lpitch < 0 && np < PITCH_LO) np = (int32_t)cp < PITCH_LO ? (int32_t)cp : PITCH_LO;
         put(p + 0x30, cy, (uint32_t)ny); put(p + 0x34, cp, (uint32_t)np);

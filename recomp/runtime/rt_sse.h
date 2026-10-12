@@ -9,6 +9,9 @@
  * NaN (0x7fc00000) rather than x86's 0xffc00000. */
 #ifndef RT_SSE_H
 #define RT_SSE_H
+#if defined(__SSE2__) && !defined(RT_SSE_SCALAR)
+#include <emmintrin.h>
+#endif
 
 static inline void rt_ldx(const uint8_t *M, X128 *s, uint32_t a, unsigned n) { memset(s, 0, 16); memcpy(s, M + a, n); }
 static inline void rt_stx(uint8_t *M, uint32_t a, const X128 *s, unsigned n) { memcpy(M + a, s, n); }
@@ -100,8 +103,26 @@ static inline uint32_t sse_pmovmskb(const X128 *s, int n) { uint32_t m = 0; for 
 /* ---- integer lanes ---- */
 #define SSE_LANES(name, field, n, EXPR) \
 static inline void sse_##name(X128 *d, const X128 *s) { X128 r; for (int k = 0; k < (n); k++) { __typeof__(d->field[0]) a = d->field[k], b = s->field[k]; r.field[k] = (EXPR); } *d = r; }
-SSE_LANES(paddb, b, 16, a + b)  SSE_LANES(paddw, w, 8, a + b)  SSE_LANES(paddd, d, 4, a + b)  SSE_LANES(paddq, q, 2, a + b)
-SSE_LANES(psubb, b, 16, a - b)  SSE_LANES(psubw, w, 8, a - b)  SSE_LANES(psubd, d, 4, a - b)  SSE_LANES(psubq, q, 2, a - b)
+SSE_LANES(paddb, b, 16, a + b)  SSE_LANES(paddw, w, 8, a + b)  SSE_LANES(paddq, q, 2, a + b)
+SSE_LANES(psubb, b, 16, a - b)  SSE_LANES(psubw, w, 8, a - b)  SSE_LANES(psubq, q, 2, a - b)
+/* Keep packed dword arithmetic packed on x86, also when only the MMX
+ * low half is live. Scalarizing this creates carry-mask work in terrain loops. */
+#if defined(__SSE2__) && !defined(RT_SSE_SCALAR)
+static inline void sse_paddd(X128 *d, const X128 *s) {
+    __m128i a = _mm_loadu_si128((const __m128i *)d), b = _mm_loadu_si128((const __m128i *)s);
+    _mm_storeu_si128((__m128i *)d, _mm_add_epi32(a, b));
+}
+#else
+SSE_LANES(paddd, d, 4, a + b)
+#endif
+#if defined(__SSE2__) && !defined(RT_SSE_SCALAR)
+static inline void sse_psubd(X128 *d, const X128 *s) {
+    __m128i a = _mm_loadu_si128((const __m128i *)d), b = _mm_loadu_si128((const __m128i *)s);
+    _mm_storeu_si128((__m128i *)d, _mm_sub_epi32(a, b));
+}
+#else
+SSE_LANES(psubd, d, 4, a - b)
+#endif
 SSE_LANES(paddusb, b, 16, a + b > 0xff ? 0xff : a + b)    SSE_LANES(paddusw, w, 8, a + b > 0xffff ? 0xffff : a + b)
 SSE_LANES(psubusb, b, 16, a > b ? a - b : 0)               SSE_LANES(psubusw, w, 8, a > b ? a - b : 0)
 SSE_LANES(paddsw, sw, 8, a + b > 32767 ? 32767 : a + b < -32768 ? -32768 : a + b)
@@ -135,6 +156,20 @@ static inline void mmx_packsswb(X128 *d, const X128 *s) { X128 r; memset(&r, 0, 
 static inline void mmx_packuswb(X128 *d, const X128 *s) { X128 r; memset(&r, 0, 16); for (int k = 0; k < 4; k++) { r.b[k] = satu8(d->sw[k]); r.b[4 + k] = satu8(s->sw[k]); } *d = r; }
 static inline void mmx_packssdw(X128 *d, const X128 *s) { X128 r; memset(&r, 0, 16); for (int k = 0; k < 2; k++) { r.sw[k] = sat16(d->sd[k]); r.sw[2 + k] = sat16(s->sd[k]); } *d = r; }
 /* shifts by a count (an immediate or the source's low 64 bits): counts past the lane width give 0 (sign for psra) */
+/* Native variable-count SSE2 shifts retain the full unsigned count and
+ * architectural saturation rules. Other hosts use the same scalar model. */
+#if defined(__SSE2__) && !defined(RT_SSE_SCALAR)
+#define SSE_SHIFT_NATIVE(name, op) \
+static inline void sse_##name(X128 *d, uint64_t n) { \
+    __m128i a = _mm_loadu_si128((const __m128i *)d); \
+    _mm_storeu_si128((__m128i *)d, op(a, _mm_cvtsi64_si128((int64_t)n))); \
+}
+SSE_SHIFT_NATIVE(psllw, _mm_sll_epi16) SSE_SHIFT_NATIVE(pslld, _mm_sll_epi32)
+SSE_SHIFT_NATIVE(psllq, _mm_sll_epi64) SSE_SHIFT_NATIVE(psrlw, _mm_srl_epi16)
+SSE_SHIFT_NATIVE(psrld, _mm_srl_epi32) SSE_SHIFT_NATIVE(psrlq, _mm_srl_epi64)
+SSE_SHIFT_NATIVE(psraw, _mm_sra_epi16) SSE_SHIFT_NATIVE(psrad, _mm_sra_epi32)
+#undef SSE_SHIFT_NATIVE
+#else
 static inline void sse_psllw(X128 *d, uint64_t n) { for (int k = 0; k < 8; k++) d->w[k] = n > 15 ? 0 : (uint16_t)(d->w[k] << n); }
 static inline void sse_pslld(X128 *d, uint64_t n) { for (int k = 0; k < 4; k++) d->d[k] = n > 31 ? 0 : d->d[k] << n; }
 static inline void sse_psllq(X128 *d, uint64_t n) { for (int k = 0; k < 2; k++) d->q[k] = n > 63 ? 0 : d->q[k] << n; }
@@ -143,6 +178,7 @@ static inline void sse_psrld(X128 *d, uint64_t n) { for (int k = 0; k < 4; k++) 
 static inline void sse_psrlq(X128 *d, uint64_t n) { for (int k = 0; k < 2; k++) d->q[k] = n > 63 ? 0 : d->q[k] >> n; }
 static inline void sse_psraw(X128 *d, uint64_t n) { for (int k = 0; k < 8; k++) d->sw[k] = (int16_t)(d->sw[k] >> (n > 15 ? 15 : n)); }
 static inline void sse_psrad(X128 *d, uint64_t n) { for (int k = 0; k < 4; k++) d->sd[k] = d->sd[k] >> (n > 31 ? 31 : n); }
+#endif
 static inline void sse_pslldq(X128 *d, uint64_t n) { X128 r = {{0}}; if (n < 16) memcpy(r.b + n, d->b, 16 - n); *d = r; }
 static inline void sse_psrldq(X128 *d, uint64_t n) { X128 r = {{0}}; if (n < 16) memcpy(r.b, d->b + n, 16 - n); *d = r; }
 

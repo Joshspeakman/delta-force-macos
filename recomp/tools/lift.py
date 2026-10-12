@@ -448,7 +448,7 @@ class Lifter:
 
     def emit_smc(self, i, f, insns, callees):
         """An instruction with fields the program rewrites: the field is read from guest memory when it runs. A 1-byte
-        field (shift counts, imm8) dispatches over its 256 values, each lifted from the re-encoded instruction; a
+        field uses a live SIMD shift count when possible, otherwise dispatches over its 256 re-encoded values; a
         4-byte field is lifted with a marker value that is replaced by a load of the field."""
         fields = self.smc[i.address]; raw = bytearray(i.bytes)
         if (i.mnemonic in ('call', 'jmp') or i.mnemonic.startswith('j') or i.mnemonic.startswith('loop')) and not (
@@ -460,6 +460,13 @@ class Lifter:
             return d
         wide = [(fa, n) for fa, n, _ in fields if n == 4]; narrow = [(fa, n) for fa, n, _ in fields if n == 1]
         if any(n not in (1, 4) for _, n, _ in fields) or len(narrow) > 1: raise Unsupported('smc field size')
+        # Terrain loops patch SIMD shift immediates between scanlines. The
+        # helpers already implement every imm8 count, including saturation at
+        # the lane width, so a live load avoids a 256-way branch per shift.
+        if (not wide and len(narrow) == 1 and i.mnemonic in sse.SHIFT
+                and len(i.operands) == 2 and i.operands[1].type == X.X86_OP_IMM
+                and i.imm_size == 1 and narrow[0][0] == i.address + i.imm_offset):
+            return sse.emit(self, i, i.mnemonic, shift_count='R8(0x%08xu)' % narrow[0][0])
         marks = {}
         for k, (fa, n) in enumerate(wide):
             m = 0x5AC00000 | ((i.address * 7 + k * 0x101) & 0xffff) << 2

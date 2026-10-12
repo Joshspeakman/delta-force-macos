@@ -156,6 +156,11 @@ typedef struct { uint32_t frame; double at; char kind[8]; int x, y; char path[51
 static Act acts[256]; static int nacts;
 static double vcur_x, vcur_y;          // virtual cursor in game (display mode) pixels
 static void post(uint32_t msg, uint32_t wp, uint32_t lp);
+static int captured;
+static double raw_fx, raw_fy, cursor_fx, cursor_fy;
+extern void w32_raw_mouse_move(int dx, int dy);
+extern void w32_raw_mouse_sample(int32_t *dx, int32_t *dy, int consume);
+static void capture(int on);
 static void rel_motion(double gx, double gy);   /* relative motion in game pixels, the real-input path */
 static uint32_t pos_lp(void);
 static void parse_script(void)
@@ -238,7 +243,7 @@ static const char *script_tick(uint32_t fno)       /* returns a screenshot path 
                                                                        like a real mouse, whatever the frame rate */
             int gx = a->x, gy = a->y;
             dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INTERACTIVE, 0), ^{
-                for (int k = 0; k < 500; k++) { rel_motion(gx / 500.0, gy / 500.0); usleep(1000); } });
+                for (int k = 0; k < 500; k++) { dispatch_async(dispatch_get_main_queue(), ^{ rel_motion(gx / 500.0, gy / 500.0); }); usleep(1000); } });
         }
         else if (!strcmp(a->kind, "key")) {
             if (fno == a->frame) { w32_keys[a->x & 0xff] = 0x80; post(0x100, (uint32_t)a->x, 1 | key_scan(a->x)); }
@@ -328,18 +333,35 @@ static void key_event(uint16_t code, int down, int repeat)
     /* Relative motion, applied to the game's cursor: the game reads it every frame, moves its own pointer by the
      * distance from the window centre and re-centres it (SetCursorPos). One scale for both axes: the picture is
      * shown aspect-correct (the 800x600 menus with bars at the sides). */
-    uint32_t mw, mh; dsr_mode_size(&mw, &mh);
-    double s = fmax(mw / self.bounds.size.width, mh / self.bounds.size.height);
-    rel_motion(e.deltaX * s, e.deltaY * s);
+    rel_motion(e.deltaX, e.deltaY);
 }
 - (void)mouseMoved:(NSEvent *)e { [self moved:e]; }
 @end
 static void rel_motion(double gx, double gy)
 {
-    static double fx, fy; fx += gx; fy += gy;
-    int dx = (int)fx, dy = (int)fy; fx -= dx; fy -= dy;
-    if (!dx && !dy) return;
+    /* Scripted motion originates on the render thread. Serialize it with real
+     * Cocoa events and capture resets before accessing the window or fractions. */
+    if (![NSThread isMainThread]) {
+        dispatch_async(dispatch_get_main_queue(), ^{ rel_motion(gx, gy); });
+        return;
+    }
+    if (!test_mode && !captured) return;
+    if (!isfinite(gx) || !isfinite(gy)) return;
+    /* Keep look sensitivity independent of the window and render resolution.
+     * Cocoa supplies host deltas; only the menu cursor is scaled to game pixels. */
+    raw_fx += gx; raw_fy += gy;
+    int rx = (int)fmax(-2147483647.0, fmin(2147483647.0, raw_fx));
+    int ry = (int)fmax(-2147483647.0, fmin(2147483647.0, raw_fy));
+    raw_fx -= rx; raw_fy -= ry;
+    w32_raw_mouse_move(rx, ry);
     uint32_t mw, mh; dsr_mode_size(&mw, &mh);
+    NSSize size = win.contentView.bounds.size;
+    double scale = fmax(mw / fmax(size.width, 1), mh / fmax(size.height, 1));
+    cursor_fx += gx * scale; cursor_fy += gy * scale;
+    int dx = (int)fmax(-1048576.0, fmin(1048576.0, cursor_fx));
+    int dy = (int)fmax(-1048576.0, fmin(1048576.0, cursor_fy));
+    cursor_fx -= dx; cursor_fy -= dy;
+    if (!dx && !dy) return;
     int x, y; w32_move_cursor(dx, dy, (int)mw, (int)mh, &x, &y); vcur_x = x; vcur_y = y;
     post(0x200, mk(), pos_lp());
 }
@@ -374,6 +396,7 @@ static void rel_motion(double gx, double gy)
 - (void)keyDown:(NSEvent *)e
 {
     if (e.modifierFlags & NSEventModifierFlagCommand) { [super keyDown:e]; return; }
+    if (e.keyCode == 0x6f) { if (!e.ARepeat) capture(!captured); return; } /* F12 */
     key_event(e.keyCode, 1, e.ARepeat);
     NSString *s = e.characters;
     for (NSUInteger k = 0; k < s.length; k++) {
@@ -382,7 +405,7 @@ static void rel_motion(double gx, double gy)
         if (w32_wide_to_mb(1252, &w, 1, &b, 1) == 1) post(0x102, b, 1);
     }
 }
-- (void)keyUp:(NSEvent *)e { key_event(e.keyCode, 0, 0); }
+- (void)keyUp:(NSEvent *)e { if (e.keyCode != 0x6f) key_event(e.keyCode, 0, 0); }
 - (void)flagsChanged:(NSEvent *)e
 {
     static const struct { uint16_t code; NSEventModifierFlags flag; } mods[] = {
@@ -396,10 +419,11 @@ static void rel_motion(double gx, double gy)
 // ---------------------------------------------------------------- window + capture
 static void capture(int on)
 {
-    static int captured;
-    if (test_mode) return;
     if (on == captured) return;
     captured = on;
+    raw_fx = raw_fy = cursor_fx = cursor_fy = 0;
+    int32_t dx, dy; w32_raw_mouse_sample(&dx, &dy, 1);
+    if (test_mode) return;
     if (on) { [NSCursor hide]; CGAssociateMouseAndMouseCursorPosition(false); }
     else { CGAssociateMouseAndMouseCursorPosition(true); [NSCursor unhide]; }
 }

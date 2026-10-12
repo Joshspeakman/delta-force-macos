@@ -35,7 +35,7 @@ SHIFT = {'psllw', 'pslld', 'psllq', 'psrlw', 'psrld', 'psrlq', 'psraw', 'psrad',
 PUNPCK = re.compile(r'punpck([lh])(bw|wd|dq|qdq)$')
 MOVE16 = {'movaps', 'movups', 'movapd', 'movupd', 'movdqa', 'movdqu', 'movntps', 'movntpd', 'movntdq', 'lddqu'}
 
-def emit(L, i, mn):
+def emit(L, i, mn, shift_count=None):
     o = i.operands
 
     def src(op, size=None):
@@ -78,7 +78,9 @@ def emit(L, i, mn):
         return op2('sse_punpck', ', %d, %d, %d' % ({'bw': 1, 'wd': 2, 'dq': 4, 'qdq': 8}[m.group(2)], m.group(1) == 'h', width))
     if mn in SHIFT:
         dp, dptr, de = dst(o[0])
-        if o[1].type == X.X86_OP_IMM: return '{ %ssse_%s(%s, %du);%s }' % (dp, mn, dptr, o[1].imm & 0xff, de)
+        if o[1].type == X.X86_OP_IMM:
+            count = shift_count if shift_count is not None else '%du' % (o[1].imm & 0xff)
+            return '{ %ssse_%s(%s, %s);%s }' % (dp, mn, dptr, count, de)
         sp, sptr = src(o[1])
         return '{ %s%ssse_%s(%s, (%s)->q[0]);%s }' % (dp, sp, mn, dptr, sptr, de)
 

@@ -1,0 +1,21 @@
+Local macOS runtime update — 12 October 2026
+
+Port the applicable shared-runtime changes from the Linux native-port review:
+heap boundary/overflow/slot reuse, concurrent overlay paths, thread resource
+lifetime, graphics-interface cleanup, faster audio sampling and message removal.
+Use a checked immutable dispatch table and free VM gaps where not already present.
+Preserve the existing native Metal renderer, CoreAudio, edition handling and
+Apple Silicon memory-protection behavior. DirectPlay 8 fragmentation, DirectDraw
+conversion and Vulkan guest ownership/cache fixes apply where modules exist.
+
+Validation: recomp/tests/runtime_regressions_macos.py runs portable synthetic
+regressions with AddressSanitizer and UndefinedBehaviorSanitizer. Guest process
+memory intentionally lives to exit. These checks do not establish gameplay FPS.
+
+Delta Force 1/2: paired mouse samples and wrapping angle arithmetic; unscaled
+Cocoa look deltas independent of the menu cursor; motion reset on capture/focus
+changes; F12 capture toggle. Launcher adds numeric, saved Custom and Unlimited
+frame limits while honoring environment overrides. Live immediate-count MMX/SSE
+shifts remove 256-case dispatch in regenerated terrain code. x86 SSE2 remains
+guarded; Apple Silicon uses the portable path. No Linux FPS gain is claimed.
+Additional tests: launcher_fps_test.m, smc_shift_test.py, metal_regressions.sh.

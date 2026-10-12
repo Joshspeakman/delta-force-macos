@@ -11,6 +11,7 @@
 // ---------------------------------------------------------------- settings
 @interface DSRow : NSObject
 @property NSString *title; @property NSArray<NSDictionary *> *choices; @property NSInteger index;
+@property (copy) void (^didStep)(NSInteger previous);
 @property (copy) void (^activate)(void);     /* a row that runs something instead of cycling (Updates) */
 @end
 @implementation DSRow @end
@@ -116,7 +117,9 @@ enum { BANNER_H = 252, TOP_Y = 270 };
     if (k >= (NSInteger)self.rows.count) { NSInteger n = [self items]; self.focus = (self.focus + dir + n) % n; self.needsDisplay = YES; return; }   /* the group buttons */
     DSRow *r = self.rows[k]; NSInteger n = (NSInteger)r.choices.count;
     if (r.activate) { r.activate(); self.needsDisplay = YES; return; }
-    r.index = (r.index + dir + n) % n; self.needsDisplay = YES;
+    NSInteger previous = r.index; r.index = (r.index + dir + n) % n;
+    if (r.didStep) r.didStep(previous);
+    self.needsDisplay = YES;
     if (self.onChange) self.onChange();
 }
 - (void)keyDown:(NSEvent *)e
@@ -281,12 +284,22 @@ static NSArray<NSDictionary *> *shape_choices(void)
     return @[@{@"value": @"screen", @"label": @"This Display", @"note": wide},
              @{@"value": @"off", @"label": @"Original 4:3", @"note": @"Black bars at the sides, as the game shipped"}];
 }
-static NSArray<NSDictionary *> *framerate_choices(void)
+static BOOL valid_fps(NSString *value)
+{
+    if (!value.length || [value rangeOfCharacterFromSet:NSCharacterSet.decimalDigitCharacterSet.invertedSet].location != NSNotFound) return NO;
+    NSInteger n = value.integerValue; return n >= 1 && n <= 10000;
+}
+static NSArray<NSDictionary *> *framerate_choices(NSString *saved)
 {
     NSInteger hz = NSScreen.mainScreen.maximumFramesPerSecond; if (hz <= 0) hz = 60;
     NSMutableArray *a = [NSMutableArray arrayWithObject:@{@"value": @"display", @"label": [NSString stringWithFormat:@"Display (%ld FPS)", (long)hz],
         @"note": @"Smooth motion between the game's 62.5 ticks a second"}];
-    if (hz > 60) [a addObject:@{@"value": @"60", @"label": @"60 FPS", @"note": @"Smooth motion, capped at 60; cooler and quieter"}];
+    for (NSString *value in @[@"30", @"60", @"90", @"120", @"144", @"165", @"240", @"360"])
+        [a addObject:@{@"value": value, @"label": [value stringByAppendingString:@" FPS"], @"note": @"Smooth motion with an explicit frame limit"}];
+    if (valid_fps(saved) && ![a filteredArrayUsingPredicate:[NSPredicate predicateWithFormat:@"value == %@", saved]].count)
+        [a addObject:@{@"value": saved, @"label": [saved stringByAppendingString:@" FPS"], @"note": @"Your custom frame limit"}];
+    [a addObject:@{@"value": @"custom", @"label": @"Custom…", @"note": @"Choose a limit from 1 to 10,000 FPS"}];
+    [a addObject:@{@"value": @"unlimited", @"label": @"Unlimited", @"note": @"No frame limit; uses more power"}];
     [a addObject:@{@"value": @"original", @"label": @"Original", @"note": @"The game's own pacing, as it shipped"}];
     return a;
 }
@@ -312,7 +325,10 @@ static void apply(NSString *shape, NSString *fps, NSString *nova, NSString *rout
     if (!getenv("DF_RES") && [shape isEqualToString:@"off"]) setenv("DF_RES", "off", 1);
     if (!getenv("DSR_FPSCAP") && !getenv("DF_HIGH_FPS")) {
         if ([fps isEqualToString:@"original"]) setenv("DF_HIGH_FPS", "0", 1);
-        else if ([fps isEqualToString:@"60"]) setenv("DSR_FPSCAP", "60", 1);
+        else if ([fps isEqualToString:@"unlimited"] || valid_fps(fps)) {
+            setenv("DSR_FPSCAP", [fps isEqualToString:@"unlimited"] ? "0" : fps.UTF8String, 1);
+            if (!getenv("DSR_VSYNC")) setenv("DSR_VSYNC", "0", 1);
+        }
     }
     if (!getenv("DF_NO_P2P") && [nova isEqualToString:@"off"]) setenv("DF_NO_P2P", "1", 1);
     if (!getenv("DS_NO_PORTMAP") && [router isEqualToString:@"off"]) setenv("DS_NO_PORTMAP", "1", 1);
@@ -600,7 +616,25 @@ int ds_launcher_run(const char *game_dir, const char *data_dir)
     NSDictionary *saved = [NSDictionary dictionaryWithContentsOfFile:plistPath] ?: @{};
     DSRow *shape = [DSRow new], *fps = [DSRow new], *nova = [DSRow new], *router = [DSRow new], *controls = [DSRow new];
     shape.title = @"Screen Shape"; shape.choices = shape_choices(); shape.index = index_of(shape.choices, saved[@"screenShape"], 0);
-    fps.title = @"Frame Rate"; fps.choices = framerate_choices(); fps.index = index_of(fps.choices, saved[@"frameRate"], 0);
+    fps.title = @"Frame Rate"; fps.choices = framerate_choices(saved[@"frameRate"]); fps.index = index_of(fps.choices, saved[@"frameRate"], 0);
+    __weak DSRow *weakFPS = fps;
+    fps.didStep = ^(NSInteger previous) {
+        DSRow *row = weakFPS;
+        if (![row.choices[row.index][@"value"] isEqualToString:@"custom"]) return;
+        row.index = previous; /* Cancel keeps the previous choice. */
+        NSAlert *alert = [NSAlert new]; alert.messageText = @"Custom Frame Rate";
+        alert.informativeText = @"Enter a whole number from 1 to 10,000 FPS.";
+        NSTextField *field = [[NSTextField alloc] initWithFrame:NSMakeRect(0, 0, 240, 26)];
+        field.stringValue = valid_fps(row.choices[previous][@"value"]) ? row.choices[previous][@"value"] : @"120";
+        alert.accessoryView = field; [alert addButtonWithTitle:@"Set Limit"]; [alert addButtonWithTitle:@"Cancel"];
+        [alert.window setInitialFirstResponder:field];
+        while ([alert runModal] == NSAlertFirstButtonReturn) {
+            NSString *value = [field.stringValue stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+            if (!valid_fps(value)) { NSBeep(); continue; }
+            value = [NSString stringWithFormat:@"%ld", (long)value.integerValue];
+            row.choices = framerate_choices(value); row.index = index_of(row.choices, value, 0); break;
+        }
+    };
     nova.title = @"NovaWorld"; nova.choices = novaworld_choices(); nova.index = index_of(nova.choices, saved[@"novaWorld"], 0);
     router.title = @"Router"; router.choices = router_choices(); router.index = index_of(router.choices, saved[@"router"], 0);
     NSString *keys = controls_state(game, data) ?: saved[@"controls"] ?: @"classic";   /* what the soldiers' key maps are now */
@@ -627,7 +661,7 @@ int ds_launcher_run(const char *game_dir, const char *data_dir)
     updSec.title = @"Updates"; updSec.summary = ^NSString * { NSDictionary *c = upd.choices[upd.index]; return [c[@"note"] length] ? [NSString stringWithFormat:@"%@ · %@", c[@"label"], c[@"note"]] : c[@"label"]; };
     DSLaunchView *v = [[DSLaunchView alloc] initWithFrame:NSMakeRect(0, 0, 780, 760)];
     v.top = @[controls]; v.sections = @[display, multi, guide, updSec]; v.open = -1; v.hover = v.pressed = HIT_NONE;
-    v.note = @"Renderer (Colors: Hardware, 16 Million, 256) and resolution: in the game's own Settings. Join by address under Internet.";
+    v.note = @"F12 releases or captures the mouse. Renderer (Colors: Hardware, 16 Million, 256) and resolution: in the game's own Settings. Join by address under Internet.";
     __weak DSLaunchView *wv = v; __weak DSRow *wu = upd, *wc = controls;
     guide.activate = ^{
         BOOL modern = [val(wc) isEqualToString:@"modern"];
