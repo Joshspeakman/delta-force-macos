@@ -346,7 +346,7 @@ Switches:
 | `W32_SMCLOG=1` | code bytes changed at run time |
 | `W32_DDLOG=1` | DirectDraw/Direct3D calls and each distinct draw state |
 | `DF_MOUSELOG=1` | SetCursorPos and posted mouse messages |
-| `DF_PAD=0` `DF_PAD_LOOK=` `DF_PAD_POINTER=` `DF_PAD_LOG=1` | game controller (`recomp/host/df_pad.h`): off; look / menu pointer speed (x1 = 1100 / 700 game pixels a second); the keys it presses. `DF_PAD_KEYS` (set by the launch window): the soldiers' key map. `DF_PAD_TEST=<file>`: the controller's state from a file, `buttons(hex) lx ly rx ry lt rt` |
+| `DF_PAD=0` `DF_PAD_LOOK=` `DF_PAD_POINTER=` `DF_PAD_LOG=1` | game controller (`recomp/host/df_pad.h`): off; look / menu pointer speed (x1 = 1100 / 700 game pixels a second); `DF_PAD_SCOPE=` the look speed through the scope (x1 = DF 0.5, DF2 0.3 of it); the keys it presses. `DF_PAD_KEYS` (set by the launch window): the soldiers' key map. `DF_PAD_TEST=<file>`: the controller's state from a file, `buttons(hex) lx ly rx ry lt rt` |
 | `DF_HIGH_FPS=0` | one frame per tick, as the games shipped (frame cap back to `auto`) |
 | `DF_FRAME_LOG=1\|2\|3` | per second: ticks, renders, in-between frames, late frames; 2: every tick and frame; 3: every wait (disturbs the timing) |
 | `DSR_FPSCAP=<fps>\|display\|auto\|0` | the frame cap (Delta Force: `display`, the window's display) |

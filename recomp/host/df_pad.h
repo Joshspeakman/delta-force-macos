@@ -21,7 +21,7 @@ enum { PB_A = 1 << 0, PB_B = 1 << 1, PB_X = 1 << 2, PB_Y = 1 << 3, PB_LB = 1 << 
        PB_L3 = 1 << 8, PB_R3 = 1 << 9, PB_UP = 1 << 10, PB_DOWN = 1 << 11, PB_LEFT = 1 << 12, PB_RIGHT = 1 << 13 };
 typedef struct { double lx, ly, rx, ry, lt, rt; uint32_t b; } PadState;   /* sticks -1..1, up positive; triggers 0..1 */
 
-int df_in_mission(void);
+int df_in_mission(void), df_scoped(void);
 static void pad_key(int vk, int down);
 static void pad_motion(double dx, double dy);
 static void pad_click(int down);
@@ -54,7 +54,7 @@ static const struct { uint32_t b; int vk; } pad_menu[] = {
     {PB_B, 0x1b}, {PB_MENU, 0x1b}, {PB_X, 0x08}, {PB_Y, 0x0d}, {PB_UP, 0x26}, {PB_DOWN, 0x28}, {PB_LEFT, 0x25}, {PB_RIGHT, 0x27}};
 
 static struct {
-    int init, off, lg; double look, pointer;
+    int init, off, lg, scoped; double look, pointer, scope;
     uint8_t keys[PAD_KEYS_N];
     int mode;                       /* -1 nothing held yet, 0 menus, 1 mission */
     uint8_t down[256];              /* the keys this controller holds down */
@@ -104,6 +104,14 @@ static void pad_tick(const PadState *s, double dt)
         const char *e = getenv("DF_PAD"); pad.off = e && !atoi(e);
         e = getenv("DF_PAD_LOG"); pad.lg = e && atoi(e);
         e = getenv("DF_PAD_LOOK"); pad.look = 1100 * (e && atof(e) > 0 ? atof(e) : 1);
+        /* looking through the scope: slower, and finer still for a small push. Delta Force already turns a quarter as
+         * fast scoped; Delta Force 2 turns faster the larger each tick's motion, so the stick's steady motion stays slow */
+#ifdef DF2_EDITION
+        pad.scope = 0.3;
+#else
+        pad.scope = 0.5;
+#endif
+        e = getenv("DF_PAD_SCOPE"); if (e && atof(e) > 0) pad.scope *= atof(e);
         e = getenv("DF_PAD_POINTER"); pad.pointer = 700 * (e && atof(e) > 0 ? atof(e) : 1);
         memcpy(pad.keys, pad_classic, sizeof pad.keys);
         e = getenv("DF_PAD_KEYS");
@@ -146,8 +154,11 @@ static void pad_tick(const PadState *s, double dt)
         pad_set(pad_vk(A_RIGHT), x > 0.38 * v && v > 0); pad_set(pad_vk(A_LEFT), x < -0.38 * v && v > 0);
         pad_set(pad_vk(A_WALK), v > 0 && v < 0.55);
         /* right stick: look, as mouse motion */
-        pad_shape(s->rx, s->ry, 0.12, 2.2, &x, &y);
-        pad.fx += x * pad.look * dt; pad.fy -= y * pad.look * 0.7 * dt;
+        int sc = df_scoped();
+        if (sc != pad.scoped) { pad.scoped = sc; if (pad.lg) fprintf(stderr, "pad: scope %s\n", sc ? "up" : "down"); }
+        double look = pad.look * (sc ? pad.scope : 1);
+        pad_shape(s->rx, s->ry, 0.12, sc ? 3 : 2.2, &x, &y);
+        pad.fx += x * look * dt; pad.fy -= y * look * 0.7 * dt;
         /* triggers: fire and scope */
         pad_set(pad_vk(A_FIRE), rt > 0.35);
         pad_set(pad_vk(A_SCOPE), s->lt > 0.35);

@@ -419,12 +419,16 @@ static void loop_waits(Ctx *c)
     st.unrestored += bad;
 }
 
+/* the controller (host/df_pad.h): the scope (or binoculars) up, as the mouse-look scaler last found it */
+static volatile int df_scope_on;
+int df_scoped(void) { return df_scope_on; }
 int df_frame_hook(Ctx *c, uint32_t addr)
 {
     switch (addr) {
     case H_TICK: case H_MOUSE: case H_SLEEP: case H_PRERENDER: case H_RENDER_RET: break;
     default: return 0;
     }
+    if (addr == H_MOUSE) df_scope_on = call_guest(c, F_ZOOMED) != 0;   /* for the controller, with or without high frame rates */
     if (!enabled()) return 1;
     switch (addr) {
     case H_TICK: tick_starts(); break;
