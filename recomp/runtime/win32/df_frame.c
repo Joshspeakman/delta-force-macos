@@ -448,6 +448,8 @@ int df_frame_hook(Ctx *c, uint32_t addr)
     }
     return 1;
 }
+/* the controller (host/df_pad.h): a mission is being played, not a menu or the score screen */
+int df_in_mission(void) { return G_MEM && r32(A_STATE) == GAME_LOOP && r32(A_PLAYER) && !score_screen(); }
 int df_frame_override(Ctx *c, uint32_t addr)   /* the Game Loop render: 1 when it is not drawn this time */
 {
     return addr == H_RENDER && enabled() ? render_starts(c) : 0;

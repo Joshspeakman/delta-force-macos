@@ -197,6 +197,35 @@ static void type_text(const char *text) {
  }
 }
 
+#ifdef DF_EDITION
+/* the game controller (df_pad.h): SDL's game controller, the one connected last; read with the events */
+static void pad_key(int vk,int down) {
+ for(int sc=0;sc<SDL_NUM_SCANCODES;sc++) { Key k=keymap((SDL_Scancode)sc); if(k.vk==vk) { key_event(k,down,0); return; } }
+}
+static void pad_motion(double dx,double dy) { rel_motion(dx,dy); }
+static void pad_click(int down) {
+ w32_di_mouse_button(0,down); if(down) buttons|=1; else buttons&=~1u; w32_keys[1]=down?128:0; post(down?0x201:0x202,mk(),pos_lp());
+}
+#include "df_pad.h"
+static SDL_GameController *pad_dev;
+static void pad_poll(void) {
+ static Uint64 last; Uint64 now=SDL_GetPerformanceCounter(); double dt=last?(double)(now-last)/SDL_GetPerformanceFrequency():0; last=now;
+ PadState s={0};
+ if(pad_dev && (SDL_GetWindowFlags(window)&SDL_WINDOW_INPUT_FOCUS)) {
+  #define AX(a) (SDL_GameControllerGetAxis(pad_dev,SDL_CONTROLLER_AXIS_##a)/32767.0)
+  s.lx=AX(LEFTX); s.ly=-AX(LEFTY); s.rx=AX(RIGHTX); s.ry=-AX(RIGHTY); s.lt=AX(TRIGGERLEFT); s.rt=AX(TRIGGERRIGHT);
+  #undef AX
+  static const struct { SDL_GameControllerButton in; uint32_t b; } m[]={
+   {SDL_CONTROLLER_BUTTON_A,PB_A},{SDL_CONTROLLER_BUTTON_B,PB_B},{SDL_CONTROLLER_BUTTON_X,PB_X},{SDL_CONTROLLER_BUTTON_Y,PB_Y},
+   {SDL_CONTROLLER_BUTTON_LEFTSHOULDER,PB_LB},{SDL_CONTROLLER_BUTTON_RIGHTSHOULDER,PB_RB},{SDL_CONTROLLER_BUTTON_BACK,PB_VIEW},
+   {SDL_CONTROLLER_BUTTON_START,PB_MENU},{SDL_CONTROLLER_BUTTON_LEFTSTICK,PB_L3},{SDL_CONTROLLER_BUTTON_RIGHTSTICK,PB_R3},
+   {SDL_CONTROLLER_BUTTON_DPAD_UP,PB_UP},{SDL_CONTROLLER_BUTTON_DPAD_DOWN,PB_DOWN},{SDL_CONTROLLER_BUTTON_DPAD_LEFT,PB_LEFT},{SDL_CONTROLLER_BUTTON_DPAD_RIGHT,PB_RIGHT}};
+  for(size_t k=0;k<sizeof m/sizeof *m;k++) if(SDL_GameControllerGetButton(pad_dev,m[k].in)) s.b|=m[k].b;
+ }
+ pad_tick(&s,dt);
+}
+#endif
+
 typedef struct { uint32_t frame; double at; char kind[8]; int x, y, phase; char path[512]; } Act;   // at > 0: seconds from start
 static Act acts[256]; static int nacts;
           // virtual cursor in game (display mode) pixels
@@ -360,12 +389,21 @@ static int events(void) {
   unsigned b=r?2:m?16:1; if(down) buttons|=b; else buttons&=~b; w32_keys[r?2:m?4:1]=down?128:0;
   post(m?(down?0x207:0x208):r?(down?0x204:0x205):(down?0x201:0x202),mk(),pos_lp()); break;
  }
+ #ifdef DF_EDITION
+ case SDL_CONTROLLERDEVICEADDED: { SDL_GameController *g=SDL_GameControllerOpen(e.cdevice.which); if(g) pad_dev=g; break; }
+ case SDL_CONTROLLERDEVICEREMOVED:
+  if(pad_dev && SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(pad_dev))==e.cdevice.which) { SDL_GameControllerClose(pad_dev); pad_dev=NULL; }
+  break;
+ #endif
  case SDL_MOUSEWHEEL: w32_di_mouse_wheel(e.wheel.y*120); post(0x20a,((uint32_t)(int16_t)(e.wheel.y*120)<<16)|mk(),pos_lp()); break;
  case SDL_WINDOWEVENT:
   if(e.window.event==SDL_WINDOWEVENT_FOCUS_LOST) { SDL_SetRelativeMouseMode(SDL_FALSE); w32_relative_cursor(0); memset(w32_keys,0,sizeof w32_keys); buttons=0; w32_di_release_all(); post(0x1c,0,0); }
   if(e.window.event==SDL_WINDOWEVENT_FOCUS_GAINED) { if(!test_mode) SDL_SetRelativeMouseMode(SDL_TRUE); w32_relative_cursor(0);  /* DS2 reads the absolute virtual cursor. */ post(0x1c,1,0); }
   break;
  }
+#ifdef DF_EDITION
+ pad_poll();
+#endif
  return 1;
 }
 #ifdef DF_EDITION
@@ -454,7 +492,12 @@ int main(int argc,char **argv) {
  SDL_SetHint("SDL_APP_ID","dungeon-siege-2-linux");
  SDL_SetHint("SDL_VIDEO_X11_WMCLASS","dungeon-siege-2-linux");
  SDL_SetHint("SDL_VIDEO_WAYLAND_WMCLASS","dungeon-siege-2-linux");
- if(SDL_Init(SDL_INIT_VIDEO|SDL_INIT_EVENTS)) { fprintf(stderr,"SDL: %s\n",SDL_GetError()); return 1; }
+ #ifdef DF_EDITION
+ #define DF_SDL_PAD SDL_INIT_GAMECONTROLLER
+ #else
+ #define DF_SDL_PAD 0
+ #endif
+ if(SDL_Init(SDL_INIT_VIDEO|SDL_INIT_EVENTS|DF_SDL_PAD)) { fprintf(stderr,"SDL: %s\n",SDL_GetError()); return 1; }
  SDL_DisplayMode dm; if(!SDL_GetDesktopDisplayMode(0,&dm)) { w32_screen_w=dm.w; w32_screen_h=dm.h; if(dm.refresh_rate>0) w32_screen_hz=dm.refresh_rate; }
  /* Linux automatic mode follows the display, without the legacy 120 fps ceiling. */
  const char *fps=getenv("DSR_FPSCAP");

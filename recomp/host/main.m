@@ -8,6 +8,7 @@
 #import <AppKit/AppKit.h>
 #import <Metal/Metal.h>
 #import <QuartzCore/QuartzCore.h>
+#import <GameController/GameController.h>
 #ifndef DS_BUILD
 #define DS_BUILD "dev"
 #endif
@@ -416,6 +417,47 @@ static void rel_motion(double gx, double gy)
 }
 @end
 
+#ifdef DF_EDITION
+// ---------------------------------------------------------------- game controller (df_pad.h)
+static void pad_key(int vk, int down)                   /* through the keyboard's own path, as the key with that VK */
+{
+    for (uint16_t k = 0; k < 128; k++) if (keymap[k].vk == vk) { key_event(k, down, 0); return; }
+}
+static void pad_motion(double dx, double dy) { rel_motion(dx, dy); }
+static void pad_click(int down)
+{
+    if (down) { buttons |= 1; w32_keys[1] = 0x80; post(0x201, mk(), pos_lp()); }
+    else { buttons &= ~1u; w32_keys[1] = 0; post(0x202, mk(), pos_lp()); }
+}
+#include "df_pad.h"
+/* the controller read 250 times a second on the main thread (where the keyboard and mouse come in too): the one in use
+ * last (GCController.current), only while the game is the active app */
+static void pad_start(void)
+{
+    static dispatch_source_t t; static double last;
+    if (t) return;
+    t = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_main_queue());
+    dispatch_source_set_timer(t, DISPATCH_TIME_NOW, 4 * NSEC_PER_MSEC, NSEC_PER_MSEC);
+    dispatch_source_set_event_handler(t, ^{
+        double now = CACurrentMediaTime(), dt = last ? now - last : 0; last = now;
+        PadState s = {0};
+        GCExtendedGamepad *g = (GCController.current ?: GCController.controllers.firstObject).extendedGamepad;
+        if (g && NSApp.active) {
+            s.lx = g.leftThumbstick.xAxis.value; s.ly = g.leftThumbstick.yAxis.value;
+            s.rx = g.rightThumbstick.xAxis.value; s.ry = g.rightThumbstick.yAxis.value;
+            s.lt = g.leftTrigger.value; s.rt = g.rightTrigger.value;
+            const struct { GCControllerButtonInput *in; uint32_t b; } m[] = {
+                {g.buttonA, PB_A}, {g.buttonB, PB_B}, {g.buttonX, PB_X}, {g.buttonY, PB_Y}, {g.leftShoulder, PB_LB}, {g.rightShoulder, PB_RB},
+                {g.buttonOptions, PB_VIEW}, {g.buttonMenu, PB_MENU}, {g.leftThumbstickButton, PB_L3}, {g.rightThumbstickButton, PB_R3},
+                {g.dpad.up, PB_UP}, {g.dpad.down, PB_DOWN}, {g.dpad.left, PB_LEFT}, {g.dpad.right, PB_RIGHT}};
+            for (size_t k = 0; k < sizeof m / sizeof *m; k++) if (m[k].in.pressed) s.b |= m[k].b;
+        }
+        pad_tick(&s, dt);
+    });
+    dispatch_resume(t);
+}
+#endif
+
 // ---------------------------------------------------------------- window + capture
 static void capture(int on)
 {
@@ -439,6 +481,9 @@ static void window_created(uint32_t hwnd, int x, int y, int w, int h, uint32_t s
     game_hwnd = hwnd;
 #endif
     dispatch_async(dispatch_get_main_queue(), ^{
+#ifdef DF_EDITION
+        pad_start();
+#endif
         NSRect f = NSScreen.mainScreen.frame;
         NSWindowStyleMask sm = NSWindowStyleMaskBorderless;
         if (test_mode) { f = NSMakeRect(80, 80, 960, 620); sm = NSWindowStyleMaskTitled | NSWindowStyleMaskMiniaturizable; }

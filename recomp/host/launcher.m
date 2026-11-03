@@ -463,6 +463,29 @@ static BOOL controls_apply(NSString *game, NSString *data, BOOL modern, BOOL all
     }
     return ok;
 }
+/* the game controller (host/df_pad.h) presses the keys of the soldiers' map: DF_PAD_KEYS, one hex byte per entry, from
+ * the preset, or with Custom from the first named soldier with keys of his own */
+static void pad_env(NSString *game, NSString *data, NSString *controls)
+{
+    if (getenv("DF_PAD_KEYS")) return;
+    uint8_t k[KEYS_N]; memcpy(k, [controls isEqualToString:@"modern"] ? modern_keys : classic_keys, KEYS_N);
+    if ([controls isEqualToString:@"custom"]) {
+        BOOL found = NO;
+        for (NSArray *f in keymap_files()) {
+            NSString *src = keymap_source(game, data, f[0]); NSData *d = src ? [NSData dataWithContentsOfFile:src] : nil; if (!d) continue;
+            NSArray *maps = f[1], *names = f[2];
+            for (NSUInteger i = 0; i < maps.count && !found; i++) {
+                NSUInteger o = [maps[i] unsignedIntegerValue];
+                if (o + 12 * KEYS_N > d.length || !soldier_named(d, [names[i] integerValue]) || keymap_kind((const uint8_t *)d.bytes + o)) continue;
+                for (int j = 0; j < KEYS_N; j++) k[j] = ((const uint8_t *)d.bytes)[o + 12 * j];
+                found = YES;
+            }
+            if (found) break;
+        }
+    }
+    char hex[2 * KEYS_N + 1]; for (int j = 0; j < KEYS_N; j++) snprintf(hex + 2 * j, 3, "%02X", k[j]);
+    setenv("DF_PAD_KEYS", hex, 1);
+}
 static NSArray<NSDictionary *> *controls_choices(BOOL custom)
 {
     NSMutableArray *a = [NSMutableArray arrayWithObjects:
@@ -471,6 +494,19 @@ static NSArray<NSDictionary *> *controls_choices(BOOL custom)
     if (custom) [a addObject:@{@"value": @"custom", @"label": @"Custom", @"note": @"Your own, from the game's Remap screen: kept as it is"}];
     return a;
 }
+/* the controller's buttons (host/df_pad.h), the same with every layout */
+#ifdef DF2_EDITION
+#define PAD_R3 "   Night vision: R3"
+#else
+#define PAD_R3 ""
+#endif
+#define PAD_GUIDE \
+    "Controller (Xbox, PlayStation, ...): Move: left stick (a small push walks)   Look: right stick\n" \
+    "Fire: RT   Scope: LT   Jump: A   Crouch / stand: tap B, prone: hold B\n" \
+    "Reload: X   Next weapon: Y   Grenade: RB   Binoculars: LB\n" \
+    "Zoom: d-pad up / down   Next waypoint: d-pad left   Audio command: d-pad right\n" \
+    "Map: View   Objectives: L3" PAD_R3 "   End mission: Menu, then A (B carries on)\n" \
+    "In the menus: either stick moves the pointer, A clicks, B goes back."
 /* the Key Guide: the chosen layout's keys */
 static NSString *key_guide(BOOL modern)
 {
@@ -482,7 +518,7 @@ static NSString *key_guide(BOOL modern)
          "Change magazine: M   Binoculars: B   Drop: D\n"
          "Map: C   Goals: G   Orders: O   Waypoint: W   Audio command: A\n"
          "Talk: T   Team talk: Y\n\n"
-         "As in the game's manual. Change any key in the game's Settings › Keyboard Remap.";
+         "As in the game's manual. Change any key in the game's Settings › Keyboard Remap.\n\n" PAD_GUIDE;
     return
         @"Move: W A S D (Shift walks)   Look: mouse\n"
          "Fire: left button (or Ctrl)   Scope: right button (or Q)\n"
@@ -499,7 +535,7 @@ static NSString *key_guide(BOOL modern)
          "Previous waypoint: E   Forward observer: J   Turbo: `   Video resolution: fn-Delete\n"
 #endif
          "Talk: T   Team talk: Y\n\n"
-         "Written into your soldiers' own key maps: the game's Settings › Keyboard Remap shows them, and can change any.";
+         "Written into your soldiers' own key maps: the game's Settings › Keyboard Remap shows them, and can change any.\n\n" PAD_GUIDE;
 }
 @interface DSBlockTarget : NSObject      /* a button action as a block */
 @property (copy) void (^fire)(NSInteger tag);
@@ -643,6 +679,7 @@ int ds_launcher_run(const char *game_dir, const char *data_dir)
     const char *shot = getenv("DS_LAUNCHER_SHOT");
     if (getenv("DS_NO_LAUNCHER") && !shot) {
         if (saved.count) apply(val(shape), val(fps), val(nova), val(router), keys);
+        pad_env(game, data, keys);
         return 1;
     }
 
@@ -667,7 +704,7 @@ int ds_launcher_run(const char *game_dir, const char *data_dir)
         BOOL modern = [val(wc) isEqualToString:@"modern"];
         NSAlert *a = [NSAlert new]; a.messageText = modern ? @"Modern Controls" : [val(wc) isEqualToString:@"custom"] ? @"Your Controls" : @"Classic Controls";
         a.informativeText = [val(wc) isEqualToString:@"custom"] ? @"Your soldiers' keys were changed in the game's own Settings › Keyboard Remap, which lists them. "
-                                                                   "Choose Classic or Modern under Controls to start again from one of those." : key_guide(modern);
+                                                                   "Choose Classic or Modern under Controls to start again from one of those.\n\n" PAD_GUIDE : key_guide(modern);
         [a addButtonWithTitle:@"OK"]; [a runModal];
     };
     updSec.activate = ^{ if (wu.activate) wu.activate(); };
@@ -743,5 +780,6 @@ int ds_launcher_run(const char *game_dir, const char *data_dir)
     }
     [@{@"screenShape": val(shape), @"frameRate": val(fps), @"novaWorld": val(nova), @"router": val(router), @"controls": cv} writeToFile:plistPath atomically:YES];
     apply(val(shape), val(fps), val(nova), val(router), cv);
+    pad_env(game, data, cv);
     return 1;
 }
