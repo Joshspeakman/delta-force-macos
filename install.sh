@@ -1,5 +1,5 @@
 #!/bin/bash
-# install.sh --game-dir <Delta Force or Delta Force 2 folder> [--app-dir DIR] [--data-dir DIR] [--branch main|nightly] [--no-downloads]
+# install.sh --game-dir <Delta Force or Delta Force 2 folder> [--app-dir DIR] [--data-dir DIR] [--branch main|nightly] [--no-downloads] [--in-place]
 #
 # Builds the natively recompiled Delta Force (Steam app 32620) or Delta Force 2 (Steam app 32630) from your own Steam
 # copy and installs it: on macOS "Delta Force.app" / "Delta Force 2.app" (default in ~/Applications), on Linux a
@@ -15,7 +15,9 @@
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 GAME=""; APPS=""; DATA=""; NODL=""; U_BRANCH=main
+IN_PLACE=""
 while [ $# -gt 0 ]; do
+  case "$1" in --in-place) IN_PLACE=1; shift; continue;; esac
   case "$1" in
     --game-dir) GAME="$2"; shift 2;; --app-dir) APPS="$2"; shift 2;; --data-dir) DATA="$2"; shift 2;;
     --branch) U_BRANCH="$2"; shift 2;;
@@ -33,6 +35,17 @@ DATA="${DATA:-$HOME/Games/${BIN}Native}"; mkdir -p "$DATA"
 echo "== recompiling $NAME from $GAME (a few minutes)"
 "$HERE/recomp/build_df.sh" "$GAME" "$HERE/recomp/work/$G"
 OUT="$HERE/recomp/work/$G"
+# The game is copied into the data folder (game-files) and the app reads it from there, so the folder it was installed
+# from is no longer needed and can be deleted. On a Mac the copy is an APFS clone: it takes no extra space. Updates and
+# reinstalls keep using the copy. --in-place reads the given folder instead (nothing is copied).
+if [ -z "$IN_PLACE" ]; then case "$GAME/" in "$DATA"/*) ;; *)
+  GF="$DATA/game-files"; echo "== copying the game from $GAME into $GF"
+  mkdir -p "$DATA"; rm -rf "$GF.part"
+  if [ "$(uname -s)" = Darwin ]; then cp -cRL "$GAME" "$GF.part" 2>/dev/null || { rm -rf "$GF.part"; cp -RL "$GAME" "$GF.part"; }
+  else cp -RL --reflink=auto "$GAME" "$GF.part"; fi
+  rm -rf "$GF"; mv "$GF.part" "$GF"
+  echo "== the app reads the game from $GF: $GAME is no longer needed (delete it to free the space)"; GAME="$GF";;
+esac; fi
 Q_GAME=$(printf '%q' "$GAME"); Q_DATA=$(printf '%q' "$DATA")      # shell-quoted: any folder name is only data
 
 if [[ $(uname -s) == Linux ]]; then
