@@ -1,0 +1,82 @@
+{
+  "name": "Delta Force 2",
+  "folder": "Delta Force 2",
+  "bundle_id": "io.github.joshspeakman.delta-force-2",
+  "release_repo": "Joshspeakman/delta-force-macos",
+  "binary": "Delta Force 2",
+  "icon_label": "DF2",
+  "version": "Steam build 19312",
+  "where": "Your Delta Force 2 folder from Steam's Windows version (app 32630), copied from a PC: steamapps/common/Delta Force 2",
+  "minutes": 2,
+  "space_gb": 2,
+  "build_gb": 1,
+  "exe": "Df2.exe",
+  "exe_sha256": {
+    "0765acdff5fc7eb077959179b0e980743287fc962b20ccac502dd94f272aa717": {
+      "version": "Steam build 19312",
+      "patch": [
+        [
+          "steamstub21.py",
+          "{exe}",
+          "{exe}"
+        ]
+      ]
+    }
+  },
+  "required": [
+    "Df2.pff",
+    "Netsock.dll",
+    "Cmprssh0.dll",
+    "Hw_d3d.dll"
+  ],
+  "libs": [
+    {
+      "file": "Netsock.dll"
+    },
+    {
+      "file": "Cmprssh0.dll",
+      "rebase": "0x11000000"
+    },
+    {
+      "file": "Hw_d3d.dll",
+      "rebase": "0x12000000"
+    }
+  ],
+  "tag_lowercase": true,
+  "lift_args": [
+    "--game",
+    "df2"
+  ],
+  "cc_args": [
+    "-fPIC",
+    "-DRT_HOST_RC_INIT=UINT32_MAX"
+  ],
+  "art": "df_art.py",
+  "log": "DeltaForce2",
+  "local_network": "Delta Force 2 hosts and joins multiplayer games on your local network and over the internet.",
+  "build": "./build_df.sh \"$GAME\" && ./tools/build_app.sh \"$PWD/work/df2\"",
+  "out": "work/df2",
+  "rt_opt": "-O1",
+  "rt_cflags": [
+    "-DDF_EDITION",
+    "-DDF2_EDITION"
+  ],
+  "host_cflags": [
+    "-DDF_EDITION",
+    "-DDF2_EDITION"
+  ],
+  "frameworks": [
+    "AppKit",
+    "GameController",
+    "Metal",
+    "QuartzCore",
+    "CoreText",
+    "CoreGraphics",
+    "CoreFoundation",
+    "AudioToolbox",
+    "CoreImage"
+  ],
+  "style": "tactical",
+  "title": "DELTA FORCE 2",
+  "art_url": "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/32630/library_hero.jpg"
+}

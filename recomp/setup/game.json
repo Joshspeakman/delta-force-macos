@@ -1,0 +1,78 @@
+{
+  "name": "Delta Force",
+  "folder": "Delta Force",
+  "bundle_id": "io.github.joshspeakman.delta-force",
+  "release_repo": "Joshspeakman/delta-force-macos",
+  "binary": "Delta Force",
+  "icon_label": "DF",
+  "version": "Steam build 19311",
+  "where": "Your Delta Force folder from Steam's Windows version (app 32620), copied from a PC: steamapps/common/Delta Force",
+  "minutes": 2,
+  "space_gb": 2,
+  "build_gb": 1,
+  "exe": "Df.exe",
+  "exe_sha256": {
+    "307bd0956f9b05f690b872b9a2823020a66b42eb22519f6d2418cf6cfe5fd98c": {
+      "version": "Steam build 19311",
+      "patch": [
+        [
+          "steamstub21.py",
+          "{exe}",
+          "{exe}"
+        ]
+      ]
+    }
+  },
+  "required": [
+    "Df.pff",
+    "Dfbase.pff",
+    "Netsock.dll",
+    "Cmprssh0.dll"
+  ],
+  "libs": [
+    {
+      "file": "Netsock.dll"
+    },
+    {
+      "file": "Cmprssh0.dll",
+      "rebase": "0x11000000"
+    }
+  ],
+  "tag_lowercase": true,
+  "lift_args": [
+    "--game",
+    "df1"
+  ],
+  "cc_args": [
+    "-fPIC",
+    "-DRT_HOST_RC_INIT=UINT32_MAX"
+  ],
+  "art": "df_art.py",
+  "log": "DeltaForce",
+  "local_network": "Delta Force hosts and joins multiplayer games on your local network and over the internet.",
+  "build": "./build_df.sh \"$GAME\" && ./tools/build_app.sh \"$PWD/work/df1\"",
+  "out": "work/df1",
+  "rt_opt": "-O1",
+  "rt_cflags": [
+    "-DDF_EDITION",
+    "-DDF1_EDITION"
+  ],
+  "host_cflags": [
+    "-DDF_EDITION",
+    "-DDF1_EDITION"
+  ],
+  "frameworks": [
+    "AppKit",
+    "GameController",
+    "Metal",
+    "QuartzCore",
+    "CoreText",
+    "CoreGraphics",
+    "CoreFoundation",
+    "AudioToolbox",
+    "CoreImage"
+  ],
+  "style": "tactical",
+  "title": "DELTA FORCE",
+  "art_url": "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/32620/library_hero.jpg"
+}
