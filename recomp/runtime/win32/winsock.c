@@ -290,7 +290,20 @@ IMPL(wsock32, ord2)                                     /* bind(s, addr, len) */
 {
     SOCK(ARG(0), 3); struct sockaddr_in a; if (!to_host(ARG(1), ARG(2), &a)) RET(fail(c, 10014), 3);
     if (w32_netvirt()) { uint16_t vp = ntohs(a.sin_port); if (!vp) { pthread_mutex_lock(&s_lock); vp = (uint16_t)vnext++; pthread_mutex_unlock(&s_lock); } vlocal(&a, vp); }
-    if (bind(fd, (struct sockaddr *)&a, sizeof a)) RET(fail_errno(c), 3);
+    /* an address that isn't this Mac's: gethostbyname lists the router's public address first (for players over the
+     * internet, net_ole.c), and a game that binds to the first one would, on Windows behind a router, have bound a
+     * local address (Ghost Recon does). Bound to every local address instead, the game is reachable as there. Only a
+     * non-local specific address falls back: EADDRINUSE and the rest still fail. */
+    int r = bind(fd, (struct sockaddr *)&a, sizeof a);
+    if (r && errno == EADDRNOTAVAIL && a.sin_addr.s_addr != htonl(INADDR_ANY)) {
+        if (getenv("W32_NETLOG")) { char ip[32]; inet_ntop(AF_INET, &a.sin_addr, ip, sizeof ip); fprintf(stderr, "net: bind %x: %s is not local, binding to any\n", ARG(0), ip); }
+        a.sin_addr.s_addr = htonl(INADDR_ANY); r = bind(fd, (struct sockaddr *)&a, sizeof a);
+    }
+    if (r) {
+        if (getenv("W32_NETLOG")) { char ip[32]; inet_ntop(AF_INET, &a.sin_addr, ip, sizeof ip); fprintf(stderr, "net: bind %x to %s:%u failed: %s\n", ARG(0), ip, ntohs(a.sin_port), strerror(errno)); }
+        RET(fail_errno(c), 3);
+    }
+    if (getenv("W32_NETLOG")) { char ip[32]; inet_ntop(AF_INET, &a.sin_addr, ip, sizeof ip); fprintf(stderr, "net: bind %x to %s:%u\n", ARG(0), ip, ntohs(a.sin_port)); }
     pthread_mutex_lock(&s_lock); S[ARG(0) - SBASE].bound = 1;
     { struct sockaddr_in g = {0}; socklen_t gl = sizeof g; int type = 0; socklen_t tl = sizeof type;
       getsockopt(fd, SOL_SOCKET, SO_TYPE, &type, &tl);

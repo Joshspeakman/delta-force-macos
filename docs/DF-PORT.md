@@ -270,6 +270,10 @@ over IPX through DirectPlay and NovaWorld through NovaLogic's servers and web pa
   those two machines was not checked; with the firewall open it is the same path as the one-computer test.
 - The DHT client against the real DHT, with a throwaway key: announce acknowledged, and found by a second node within
   seconds.
+- Router on (port mapping found the public address, so `gethostbyname` lists it first), one Mac, `W32_NETLOG=1`:
+  DF1 and DF2 each hosted a NovaWorld and a LAN game into the mission. Every game socket bound `0.0.0.0` (DF1 19010,
+  3568, 19011; DF2 3568), none the public address. `bind` still falls back to every local address when asked for an
+  address that isn't the Mac's (`EADDRNOTAVAIL`), as Ghost Recon needed; `tests/winsock_bind_test.c` covers it.
 
 **Not verified**: a game across the internet between two different networks (both routers' port mapping); more than
 two players; long games.
