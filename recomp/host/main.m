@@ -129,9 +129,13 @@ static void *render_thread(void *arg)
                                 CGContextRef cg = CGBitmapContextCreate(px, tw, th, 8, tw * 4, cs, kCGImageAlphaNoneSkipFirst | kCGBitmapByteOrder32Little);
                                 CGImageRef img = CGBitmapContextCreateImage(cg);
                                 NSBitmapImageRep *rep = [[NSBitmapImageRep alloc] initWithCGImage:img];
-                                [[rep representationUsingType:NSBitmapImageFileTypePNG properties:@{}] writeToFile:[NSString stringWithUTF8String:shot_path] atomically:YES];
+                                /* not atomically: that writes a temporary file elsewhere on the volume first, which the
+                                 * sandbox refuses on a data folder on another disk (the shot was lost without a word) */
+                                NSError *werr = nil;
+                                BOOL wrote = [[rep representationUsingType:NSBitmapImageFileTypePNG properties:@{}] writeToFile:[NSString stringWithUTF8String:shot_path] options:0 error:&werr];
                                 CGImageRelease(img); CGContextRelease(cg); CGColorSpaceRelease(cs); free(px);
-                                fprintf(stderr, "DungeonSiegeNative: frame %u saved to %s\n", fno, shot_path);
+                                if (wrote) fprintf(stderr, "DungeonSiegeNative: frame %u saved to %s\n", fno, shot_path);
+                                else fprintf(stderr, "DungeonSiegeNative: frame %u not saved to %s: %s\n", fno, shot_path, werr.localizedDescription.UTF8String);
                             } else if (tex) fprintf(stderr, "DungeonSiegeNative: screenshot: unexpected pixel format %lu\n", (unsigned long)tex.pixelFormat);
                         }
                     }
