@@ -1,5 +1,7 @@
 # Delta Force and Delta Force 2, native
 
+[![Buy me a Continue on Ko-fi](https://img.shields.io/badge/Buy_me_a_Continue_%7C_%245-FF5E5B?style=for-the-badge&logo=ko-fi&logoColor=white)](https://ko-fi.com/speakerjosh)
+
 NovaLogic's **Delta Force** (1998) and **Delta Force 2** (1999), statically recompiled from your own Steam copies into
 native code: no Wine, no Rosetta, no emulator. It uses the same recompiler as
 [dungeon-siege-macos](https://github.com/Joshspeakman/dungeon-siege-macos) and the author's Diablo II, Fallout: New
@@ -329,8 +331,8 @@ stays on your Mac (in the clone's `recomp/work` and in the app). Details and cre
 The code in this repository is under the MIT License: [LICENSE](LICENSE). The third-party code in `recomp/third_party`
 keeps its own licenses (see [NOTICE.md](NOTICE.md)).
 
-## Support
+## Insert Coin
 
-If you get some use out of this, you can buy me a coffee on Ko-fi.
+If this saved you some time (or saved you from buying something twice), you can buy me a Continue on Ko-fi. It's $5 and it keeps me building stuff like this.
 
-[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/speakerjosh)
+[![Buy me a Continue on Ko-fi](https://img.shields.io/badge/Buy_me_a_Continue_%7C_%245-FF5E5B?style=for-the-badge&logo=ko-fi&logoColor=white)](https://ko-fi.com/speakerjosh)
