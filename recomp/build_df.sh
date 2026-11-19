@@ -49,6 +49,6 @@ done
 echo "== compiling"
 rm -rf "$OUT/obj"; mkdir -p "$OUT/obj"
 JOBS="${DF_BUILD_JOBS:-$(getconf _NPROCESSORS_ONLN)}"
-printf '%s\n' "$OUT"/lift_*.c "$OUT"/*_lift_*.c "$OUT/fntab.c" | xargs -n 1 -P "$JOBS" "$HERE/tools/cc1.sh" "$OUT"
+printf '%s\0' "$OUT"/lift_*.c "$OUT"/*_lift_*.c "$OUT/fntab.c" | xargs -0 -n 1 -P "$JOBS" "$HERE/tools/cc1.sh" "$OUT"
 echo "== $(ls "$OUT/obj" | wc -l | tr -d ' ') object files; runtime and link"
 "$HERE/tools/build_runtime.sh" "$OUT"
