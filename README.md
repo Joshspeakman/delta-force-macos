@@ -1,5 +1,7 @@
 # Delta Force and Delta Force 2, native
 
+![Delta Force, native on Apple Silicon](media/hero.jpg)
+
 [![Buy me a Continue on Ko-fi](https://img.shields.io/badge/Buy_me_a_Continue_%7C_%245-FF5E5B?style=for-the-badge&logo=ko-fi&logoColor=white)](https://ko-fi.com/speakerjosh)
 
 NovaLogic's **Delta Force** (1998) and **Delta Force 2** (1999), statically recompiled from your own Steam copies into
@@ -12,6 +14,14 @@ Nothing from the games is in this repository. `./install.sh` verifies your `Df.e
 wrapper on a copy in the build folder, recompiles that copy (with the game's own `Netsock.dll`, `Cmprssh0.dll` and,
 for Delta Force 2, `Hw_d3d.dll`) and installs an app. The app reads the game's data from your folder, which is only
 read and has to stay where it is.
+
+## Screenshots
+
+| | |
+|---|---|
+| ![The launch window](media/screenshots/screenshot-launcher.png) | ![Df1 landing](media/screenshots/screenshot-01-df1-landing.jpg) |
+| ![Df1 palms](media/screenshots/screenshot-02-df1-palms.jpg) | ![Df2 ridge](media/screenshots/screenshot-03-df2-ridge.jpg) |
+| ![Df2 snow valley](media/screenshots/screenshot-04-df2-snow-valley.jpg) | ![Df1 briefing](media/screenshots/screenshot-05-df1-briefing.jpg) |
 
 ## State
 
